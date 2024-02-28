@@ -20,6 +20,32 @@
 #include <stdio.h>
 #include <assert.h>
 
+#include <stdint.h>
+typedef uint8_t  u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
+typedef int8_t  s8;
+typedef int16_t s16;
+typedef int32_t s32;
+typedef int64_t s64;
+typedef s8  b8;
+typedef s32 b32;
+typedef float f32;
+typedef double f64;
+#define internal static
+#define global static
+#define local_persist static
+
+#include <string.h>
+struct string {
+    u8 *data;
+    u64 count;
+    string() : data(NULL), count(0) {}
+    string(const char *cstr) : data((u8 *)cstr), count(strlen(cstr)) {}
+    string(char *str, u64 len) : data((u8 *)str), count(len) {}
+};
+#define STRZ(Str) string(Str, strlen(Str))
 
 #define STB_IMAGE_IMPLEMENTATION
 #pragma warning(push)
@@ -27,6 +53,7 @@
 #include <stb_image.h>
 #pragma warning(pop)
 
+#include "focal_math.h"
 #include "focal.h"
 
 #define WIDTH 1280
@@ -37,9 +64,28 @@ global ID3D11Device *d3d_device;
 global ID3D11DeviceContext *d3d_context;
 global ID3D11RenderTargetView *render_target;
 
+global Input_State input;
+
+global f32 zoom = 1.0f;
+
+
+inline string string_copy(const string str) {
+    string result{};
+    result.data = (u8 *)malloc(str.count);
+    memcpy(result.data, str.data, str.count);
+    result.count = str.count;
+    return result;
+}
+
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     LRESULT result = 0;
     switch (message) {
+    case WM_MOUSEWHEEL: {
+        int delta = GET_WHEEL_DELTA_WPARAM(wparam) / WHEEL_DELTA;
+        input.scroll_y += delta;
+        input.scroll_y_dt = (float)delta;
+        break;
+    }
     case WM_SIZE: {
         // NOTE: Resize render target view
         if (swapchain) {
@@ -303,7 +349,9 @@ int main(int argc, char **argv) {
         printf("Failed to create input layout\n");
     }
 
-    ID3D11SamplerState *image_sampler = nullptr;
+
+    ID3D11SamplerState *linear_sampler = nullptr;
+    ID3D11SamplerState *nearest_sampler = nullptr;
     {
         D3D11_SAMPLER_DESC desc{};
         desc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
@@ -313,7 +361,11 @@ int main(int argc, char **argv) {
         desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
         desc.MinLOD = 0;
         desc.MaxLOD = D3D11_FLOAT32_MAX;
-        if (d3d_device->CreateSamplerState(&desc, &image_sampler) != S_OK) {
+        if (d3d_device->CreateSamplerState(&desc, &nearest_sampler) != S_OK) {
+            printf("Failed to create sampler\n");
+        }
+        desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        if (d3d_device->CreateSamplerState(&desc, &linear_sampler) != S_OK) {
             printf("Failed to create sampler\n");
         }
     }
@@ -365,12 +417,12 @@ int main(int argc, char **argv) {
     v2 size = sample_texture.size;
 
     Image_Vertex vertices[] = {
-        { v2(0.0f, 0.0f), v2(0, 1) },
-        { v2(0.0f, size.y), v2(0, 0) },
-        { v2(size.x, size.y), v2(1, 0) },
-        { v2(0.0f, 0.0f), v2(0, 1) },
-        { v2(size.x, size.y), v2(1, 0) },
-        { v2(size.x, 0.0f), v2(1, 1) },
+        { v2(-0.5f, -0.5f), v2(0, 1) },
+        { v2(-0.5f,  0.5f), v2(0, 0) },
+        { v2( 0.5f,  0.5f), v2(1, 0) },
+        { v2(-0.5f, -0.5f), v2(0, 1) },
+        { v2( 0.5f,  0.5f), v2(1, 0) },
+        { v2( 0.5f, -0.5f), v2(1, 1) },
     };
 
     ID3D11Buffer *image_vertex_buffer = nullptr;
@@ -399,13 +451,14 @@ int main(int argc, char **argv) {
     }
 
     Image_Constants image_constants{};
+
+    bool sample_near = false;
+
     
     LARGE_INTEGER start_counter = win32_get_wall_clock();
     LARGE_INTEGER last_counter = start_counter;
 
     v2 position{};
-
-    Input_State input{};
 
     bool window_should_close = false;
     while (!window_should_close) {
@@ -421,6 +474,8 @@ int main(int argc, char **argv) {
         int width, height;
         win32_get_window_size(window, &width, &height);
         v2 render_dim = v2(width, height);
+
+        v2 window_center = v2_div_s(render_dim, 2.0f);
 
         BYTE keyboard_bytes[256];
         if (GetKeyboardState(keyboard_bytes)) {
@@ -439,6 +494,10 @@ int main(int argc, char **argv) {
             }
         }
 
+        if (input.key_down(VK_ESCAPE)) {
+            window_should_close = true;
+        }
+
         f32 speed = 10.0f;
         if (input.key_down(VK_LEFT)) {
             position.x -= speed;
@@ -453,6 +512,25 @@ int main(int argc, char **argv) {
             position.y -= speed;
         }
 
+        if (input.key_down('R')) {
+            zoom = 1.0f;
+        }
+
+        if (input.key_press('L')) {
+            sample_near = !sample_near;
+        }
+
+        float last_zoom = zoom;
+#define ZOOM_FACTOR 0.1f
+        zoom *= 1.0f + input.scroll_y_dt * ZOOM_FACTOR;
+
+        v2 mouse = v2_subtract(input.mouse, window_center);
+        position = v2_subtract(position, mouse);
+        position = v2_mul_s(position, zoom / last_zoom);
+        position = v2_add(position, mouse);
+
+        input.scroll_y_dt = 0.0f;
+
         m4 projection{};
         projection.e[0][0] = 2.0f / width;
         projection.e[1][1] = 2.0f / height;
@@ -462,20 +540,21 @@ int main(int argc, char **argv) {
         projection.e[3][1] = -1.0f;
         projection.e[3][2] = 0.5f;
           
-        m4 trans{};
-        trans.e[0][0] = 1.0f;
-        trans.e[1][1] = 1.0f;
-        trans.e[2][2] = 1.0f;
-        trans.e[3][3] = 1.0f;
-        trans.e[3][0] = position.x;
-        trans.e[3][1] = position.y;
-        trans.e[3][2] = 0.0f;
+        m4 camera_trans = m4_translate(v3(position.x, position.y, 0.0f));
+        m4 camera_scale = m4_scale(v3(zoom, zoom, 1.0f));
 
-        m4 mvp = m4_mult(trans, projection);
+        m4 trans = m4_translate(v3(window_center.x, window_center.y, 0.0f));
+        m4 scale = m4_scale(v3(sample_texture.size.x, sample_texture.size.y, 1.0f));
+        m4 mvp = m4_id();
+        mvp = m4_mult(mvp, camera_scale);
+        mvp = m4_mult(mvp, scale);
+        mvp = m4_mult(mvp, camera_trans);
+        mvp = m4_mult(mvp, trans);
+        mvp = m4_mult(mvp, projection);
         
         image_constants.mvp = mvp;
         
-        float bg_color[4] = {0, 0, 0, 1};
+        float bg_color[4] = {0, 0, 0, 0};
         d3d_context->ClearRenderTargetView(render_target, bg_color);
         d3d_context->ClearDepthStencilView(depth_stencil_view, D3D11_CLEAR_DEPTH|D3D11_CLEAR_STENCIL, 1.0f, 0);
         d3d_context->OMSetRenderTargets(1, &render_target, depth_stencil_view);
@@ -492,7 +571,11 @@ int main(int argc, char **argv) {
         d3d_context->OMSetBlendState(blend_state, NULL, 0xffffffff);
         d3d_context->OMSetDepthStencilState(depth_stencil_state, 0);
 
-        d3d_context->PSSetSamplers(0, 1, &image_sampler);
+        if (sample_near) {
+            d3d_context->PSSetSamplers(0, 1, &nearest_sampler);
+        } else {
+            d3d_context->PSSetSamplers(0, 1, &linear_sampler);
+        }
 
         d3d_context->VSSetConstantBuffers(0, 1, &image_constant_buffer);
         d3d_context->VSSetShader(image_vertex_shader, NULL, 0);
@@ -532,7 +615,8 @@ int main(int argc, char **argv) {
         float seconds_elapsed = 1000.0f * win32_get_seconds_elapsed(last_counter, end_counter);
         printf("seconds: %f\n", seconds_elapsed);
 #endif
-        last_counter = end_counter;}
+        last_counter = end_counter;
+    }
     
 
     return 0;
