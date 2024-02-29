@@ -27,6 +27,19 @@ union v3 {
     v3(int x, int y, int z) : x((float)x), y((float)y), z((float)z) {}
 };
 
+union v4 {
+    struct {
+        float x, y, z, w;
+    };
+    struct {
+        float r, g, b, a;
+    };
+
+    v4() : x(0), y(0), z(0), w(0) {}
+    v4(float x, float y, float z, float w) : x(x), y(y), z(z), w(w) {}
+    v4(int x, int y, int z, int w) : x((float)x), y((float)y), z((float)z), w((float)w) {}
+};
+
 union m4 {
     float e[4][4];
 };
