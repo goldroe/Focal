@@ -34,8 +34,9 @@ struct Image_Constants {
 struct Grid_Constants {
     v4 c1;
     v4 c2;
+    v2 cp;
     f32 size;
-    v3 padding;
+    f32 padding;
 };
 
 struct Shader_Program {
