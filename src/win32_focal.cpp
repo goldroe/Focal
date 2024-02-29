@@ -56,7 +56,7 @@ struct string {
 #include "focal_math.h"
 #include "focal.h"
 
-#define WIDTH 1280
+#define WIDTH 740
 #define HEIGHT 720
 
 global IDXGISwapChain *swapchain;
@@ -67,7 +67,6 @@ global ID3D11RenderTargetView *render_target;
 global Input_State input;
 
 global f32 zoom = 1.0f;
-
 
 inline string string_copy(const string str) {
     string result{};
@@ -82,7 +81,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     switch (message) {
     case WM_MOUSEWHEEL: {
         int delta = GET_WHEEL_DELTA_WPARAM(wparam) / WHEEL_DELTA;
-        input.scroll_y += delta;
         input.scroll_y_dt = (float)delta;
         break;
     }
@@ -169,6 +167,49 @@ internal void win32_get_window_size(HWND window, int *w, int *h) {
     int height = rc.bottom - rc.top;
     if (w) *w = width;
     if (h) *h = height;
+}
+
+internal void upload_constants(ID3D11Buffer *constant_buffer, void *constants, int constants_size) {
+    D3D11_MAPPED_SUBRESOURCE res{};
+    if (d3d_context->Map(constant_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &res) != S_OK) {
+        printf("Failed to map constant buffer\n");
+    }
+    memcpy(res.pData, constants, constants_size);
+    d3d_context->Unmap(constant_buffer, 0);
+}
+
+internal Shader_Program create_shader_program(string src, char *vs_entry, char *ps_entry, D3D11_INPUT_ELEMENT_DESC *items, int item_count, int constants_size) {
+    Shader_Program program{};
+    ID3DBlob *vs_blob, *ps_blob, *error_blob;
+    if (D3DCompile(src.data, src.count, nullptr, NULL, NULL, vs_entry, "vs_5_0", D3DCOMPILE_DEBUG, 0, &vs_blob, &error_blob) != S_OK) {
+        fprintf(stderr, "Failed to compile Vertex Shader\n%s", (char *)error_blob->GetBufferPointer());
+    }
+    if (D3DCompile(src.data, src.count, nullptr, NULL, NULL, "PS", "ps_5_0", D3DCOMPILE_DEBUG, 0, &ps_blob, &error_blob) != S_OK) {
+        fprintf(stderr, "Failed to compile Pixel Shader\n%s", (char *)error_blob->GetBufferPointer());
+    }
+
+    if (d3d_device->CreateVertexShader(vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(), NULL, &program.vertex_shader) != S_OK) {
+        fprintf(stderr, "Failed to compile Vertex Shader\n");
+    }
+    if (d3d_device->CreatePixelShader(ps_blob->GetBufferPointer(), ps_blob->GetBufferSize(), NULL, &program.pixel_shader) != S_OK) {
+        fprintf(stderr, "Failed to create Pixel Shader\n");
+    }
+
+    ID3D11InputLayout *input_layout = nullptr;
+    if (d3d_device->CreateInputLayout(items, item_count, vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(), &program.input_layout) != S_OK) {
+        fprintf(stderr, "Failed to create Input Layout\n");
+    }
+
+    D3D11_BUFFER_DESC desc{};
+    desc.ByteWidth = constants_size;
+    desc.Usage = D3D11_USAGE_DYNAMIC;
+    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    if (d3d_device->CreateBuffer(&desc, NULL, &program.constant_buffer) != S_OK) {
+        fprintf(stderr, "Failed to create constant buffer\n");
+    }
+
+    return program;
 }
 
 int main(int argc, char **argv) {
@@ -315,40 +356,18 @@ int main(int argc, char **argv) {
         }
     }
 
-    // COMPILE IMAGE SHADER
-    string image_shader_src = read_file("src/image.hlsl");
-    ID3DBlob *vs_blob, *ps_blob, *error_blob;
-    if (D3DCompile(image_shader_src.data, image_shader_src.count, "image.hlsl", NULL, NULL, "VS", "vs_5_0", D3DCOMPILE_DEBUG, 0, &vs_blob, &error_blob) != S_OK) {
-        printf("Failed to compile vertex shader 'image.hlsl'\n");
-        printf("%s\n", (char *)error_blob->GetBufferPointer());
-    }
-    if (D3DCompile(image_shader_src.data, image_shader_src.count, "image.hlsl", NULL, NULL, "PS", "ps_5_0", D3DCOMPILE_DEBUG, 0, &ps_blob, &error_blob) != S_OK) {
-        printf("Failed to compile pixel shader 'image.hlsl'\n");
-        printf("%s\n", (char *)error_blob->GetBufferPointer());
-    }
+    string grid_shader = read_file("src/grid.hlsl");
+    D3D11_INPUT_ELEMENT_DESC grid_layout[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    };
+    Shader_Program grid_program = create_shader_program(grid_shader, "VS", "PS", grid_layout, ARRAYSIZE(grid_layout), sizeof(Grid_Constants));
 
-    ID3D11VertexShader *image_vertex_shader = nullptr;
-    ID3D11PixelShader  *image_pixel_shader = nullptr;
-    {
-        if (d3d_device->CreateVertexShader(vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(), NULL, &image_vertex_shader) != S_OK) {
-            printf("Failed to create vertex shader 'image.hlsl'");
-        }
-        if (d3d_device->CreatePixelShader(ps_blob->GetBufferPointer(), ps_blob->GetBufferSize(), NULL, &image_pixel_shader) != S_OK) {
-            printf("Failed to create pixel shader 'image.hlsl'");
-        }
-    }
-
-    ID3D11InputLayout *image_input_layout = nullptr;
-    D3D11_INPUT_ELEMENT_DESC image_layout_items[] = {
+    string image_shader = read_file("src/image.hlsl");
+    D3D11_INPUT_ELEMENT_DESC image_layout[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT,       0, offsetof(Image_Vertex, p), D3D11_INPUT_PER_VERTEX_DATA, 0 },
         { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,       0, offsetof(Image_Vertex, uv),       D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        // { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(Image_Vertex, color),    D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
-    hr = d3d_device->CreateInputLayout(image_layout_items, ARRAYSIZE(image_layout_items), vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(), &image_input_layout);
-    if (hr != S_OK) {
-        printf("Failed to create input layout\n");
-    }
-
+    Shader_Program image_program = create_shader_program(image_shader, "VS", "PS", image_layout, ARRAYSIZE(image_layout), sizeof(Image_Constants));
 
     ID3D11SamplerState *linear_sampler = nullptr;
     ID3D11SamplerState *nearest_sampler = nullptr;
@@ -434,27 +453,37 @@ int main(int argc, char **argv) {
         D3D11_SUBRESOURCE_DATA data{};
         data.pSysMem = vertices;
         if (d3d_device->CreateBuffer(&desc, &data, &image_vertex_buffer) != S_OK) {
-            printf("Failed to create sprite vertex buffer\n");
+            printf("Failed to create image vertex buffer\n");
         }
     }
 
-    ID3D11Buffer *image_constant_buffer = nullptr;
+    v2 grid_vertices[] = {
+        v2(-1, -1),
+        v2(-1, 1),
+        v2(1, 1),
+        v2(-1, -1),
+        v2(1, 1),
+        v2(1, -1)
+    };
+
+    ID3D11Buffer *grid_vertex_buffer = nullptr;
     {
         D3D11_BUFFER_DESC desc{};
-        desc.ByteWidth = sizeof(Image_Constants);
-        desc.Usage = D3D11_USAGE_DYNAMIC;
-        desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        if (d3d_device->CreateBuffer(&desc, NULL, &image_constant_buffer) != S_OK) {
-            printf("Failed to create constant buffer\n");
+        desc.ByteWidth = sizeof(grid_vertices);
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        D3D11_SUBRESOURCE_DATA data{};
+        data.pSysMem = grid_vertices;
+        if (d3d_device->CreateBuffer(&desc, &data, &grid_vertex_buffer) != S_OK) {
+            printf("Failed to create grid vertex buffer\n");
         }
     }
 
     Image_Constants image_constants{};
+    Grid_Constants grid_constants{};
 
     bool sample_near = false;
 
-    
     LARGE_INTEGER start_counter = win32_get_wall_clock();
     LARGE_INTEGER last_counter = start_counter;
 
@@ -490,6 +519,7 @@ int main(int argc, char **argv) {
         if (GetCursorPos(&pt)) {
             if (ScreenToClient(window, &pt)) {
                 v2 m = v2(pt.x, height - pt.y);
+                input.last_mouse = input.mouse;
                 input.mouse = m;
             }
         }
@@ -518,6 +548,11 @@ int main(int argc, char **argv) {
 
         if (input.key_press('L')) {
             sample_near = !sample_near;
+        }
+
+        if (input.key_down(VK_LBUTTON)) {
+            v2 mouse_dt = v2_subtract(input.mouse, input.last_mouse);
+            position = v2_add(position, mouse_dt);
         }
 
         float last_zoom = zoom;
@@ -553,6 +588,13 @@ int main(int argc, char **argv) {
         mvp = m4_mult(mvp, projection);
         
         image_constants.mvp = mvp;
+
+        grid_constants.c1 = v4(0.2f, 0.2f, 0.2f, 1.0f);
+        grid_constants.c2 = v4(0.1f, 0.1f, 0.1f, 1.0f);
+        grid_constants.size = 100.0f;
+
+        upload_constants(image_program.constant_buffer, (void *)&image_constants, sizeof(image_constants));
+        upload_constants(grid_program.constant_buffer, (void *)&grid_constants, sizeof(grid_constants));
         
         float bg_color[4] = {0, 0, 0, 0};
         d3d_context->ClearRenderTargetView(render_target, bg_color);
@@ -577,28 +619,34 @@ int main(int argc, char **argv) {
             d3d_context->PSSetSamplers(0, 1, &linear_sampler);
         }
 
-        d3d_context->VSSetConstantBuffers(0, 1, &image_constant_buffer);
-        d3d_context->VSSetShader(image_vertex_shader, NULL, 0);
-        d3d_context->PSSetShader(image_pixel_shader, NULL, 0);
+        // render grid
+        d3d_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        d3d_context->IASetInputLayout(grid_program.input_layout);
+
+        d3d_context->PSSetConstantBuffers(0, 1, &grid_program.constant_buffer);
+        d3d_context->VSSetShader(grid_program.vertex_shader, NULL, 0);
+        d3d_context->PSSetShader(grid_program.pixel_shader, NULL, 0);
+
+        UINT stride = sizeof(v2);
+        UINT offset = 0;
+        d3d_context->IASetVertexBuffers(0, 1, &grid_vertex_buffer, &stride, &offset);
+
+        d3d_context->Draw(6, 0);
+
+        // render image
+        d3d_context->VSSetConstantBuffers(0, 1, &image_program.constant_buffer);
+        d3d_context->VSSetShader(image_program.vertex_shader, NULL, 0);
+        d3d_context->PSSetShader(image_program.pixel_shader, NULL, 0);
 
         d3d_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        d3d_context->IASetInputLayout(image_input_layout);
+        d3d_context->IASetInputLayout(image_program.input_layout);
 
-        UINT stride = sizeof(Image_Vertex);
-        UINT offset = 0;
+        stride = sizeof(Image_Vertex);
+        offset = 0;
         d3d_context->IASetVertexBuffers(0, 1, &image_vertex_buffer, &stride, &offset);
 
         d3d_context->PSSetShaderResources(0, 1, &sample_texture.srv);
 
-        // Upload image constants
-        {
-            D3D11_MAPPED_SUBRESOURCE res{};
-            if (d3d_context->Map(image_constant_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &res) != S_OK) {
-                printf("Failed to map constant buffer\n");
-            }
-            memcpy(res.pData, &image_constants, sizeof(image_constants));
-            d3d_context->Unmap(image_constant_buffer, 0);
-        }
         d3d_context->Draw(6, 0);
 
         swapchain->Present(0, 0);
