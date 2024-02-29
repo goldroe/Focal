@@ -251,7 +251,13 @@ int main(int argc, char **argv) {
     {
         RECT rc = {0, 0, WIDTH, HEIGHT};
         if (AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE)) {
-            window = CreateWindowA(CLASSNAME, "Focal", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top, NULL, NULL, hinstance, NULL);
+            // NOTE: Center window
+            RECT work_rc;
+            SystemParametersInfo(SPI_GETWORKAREA, 0, &work_rc, 0);
+            int x, y;
+            x = ((work_rc.right - work_rc.left) - rc.right) / 2;
+            y = ((work_rc.bottom - work_rc.top) - rc.bottom) / 2;
+            window = CreateWindowA(CLASSNAME, "Focal", WS_OVERLAPPEDWINDOW | WS_VISIBLE, x, y, rc.right - rc.left, rc.bottom - rc.top, NULL, NULL, hinstance, NULL);
         } else {
             printf("AdjustWindowRect failed, err:%d\n", GetLastError());
         }
@@ -259,6 +265,8 @@ int main(int argc, char **argv) {
             printf("CreateWindowA failed, err:%d\n", GetLastError());
         }
     }
+
+
 
     // INITIALIZE SWAP CHAIN
     DXGI_SWAP_CHAIN_DESC swapchain_desc{};
@@ -529,16 +537,16 @@ int main(int argc, char **argv) {
         }
 
         f32 speed = 10.0f;
-        if (input.key_down(VK_LEFT)) {
+        if (input.key_down('A')) {
             position.x -= speed;
         }
-        if (input.key_down(VK_RIGHT)) {
+        if (input.key_down('D')) {
             position.x += speed;
         }
-        if (input.key_down(VK_UP)) {
+        if (input.key_down('W')) {
             position.y += speed;
         }
-        if (input.key_down(VK_DOWN)) {
+        if (input.key_down('S')) {
             position.y -= speed;
         }
 
@@ -592,6 +600,7 @@ int main(int argc, char **argv) {
         grid_constants.c1 = v4(0.2f, 0.2f, 0.2f, 1.0f);
         grid_constants.c2 = v4(0.1f, 0.1f, 0.1f, 1.0f);
         grid_constants.size = 100.0f;
+        grid_constants.cp = window_center;
 
         upload_constants(image_program.constant_buffer, (void *)&image_constants, sizeof(image_constants));
         upload_constants(grid_program.constant_buffer, (void *)&grid_constants, sizeof(grid_constants));
