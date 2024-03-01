@@ -2,6 +2,10 @@
 
 global UI_State ui_state;
 
+void ui_init() {
+
+}
+
 internal UI_Hash ui_hash_djb2(char *str) {
     UI_Hash hash = 5381;
     int c;

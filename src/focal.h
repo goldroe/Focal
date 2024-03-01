@@ -63,6 +63,24 @@ struct UI_Draw_Data {
     ID3D11Buffer *vertex_buffer;
 };
 
+struct Font_Glyph {
+    f32 x0, y0, x1, y1;
+    f32 off_x, off_y;
+    f32 advance_x;
+};
+
+struct Font {
+    Texture texture;
+    Font_Glyph glyphs[256];
+    v2 atlas_size;
+    int max_bmp_height;
+    int bbox_height;
+    f32 ascend;
+    f32 descend;
+    f32 glyph_width;
+    f32 glyph_height;
+};
+
 internal void os_popup(char *str) {
     MessageBoxA(NULL, str, NULL, MB_OK | MB_ICONERROR | MB_ICONEXCLAMATION);
 }

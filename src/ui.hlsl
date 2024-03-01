@@ -2,6 +2,9 @@ cbuffer UI_Constants {
     matrix projection;
 };
 
+SamplerState font_sampler;
+Texture2D font_texture;
+
 struct VS_IN {
     float2 pos : POSITION;
     float2 uv  : TEXCOORD;
@@ -23,5 +26,5 @@ VS_OUT VS(VS_IN input) {
 }
 
 float4 PS(VS_OUT input) : SV_TARGET {
-    return input.color;
+    return font_texture.Sample(font_sampler, input.uv).r * input.color;
 }

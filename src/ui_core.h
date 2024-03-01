@@ -82,6 +82,9 @@ struct UI_State {
     int build_index;
     
     Array<UI_Box*> parents;
+
+    Font font;
 };
+
 
 #endif // UI_CORE_H

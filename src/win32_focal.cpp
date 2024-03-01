@@ -25,6 +25,15 @@
 #include <assert.h>
 #include <string.h>
 
+#include <ft2build.h>
+#include FT_FREETYPE_H
+
+#define STB_IMAGE_IMPLEMENTATION
+#pragma warning(push)
+#pragma warning(disable : 4244)
+#include <stb_image.h>
+#pragma warning(pop)
+
 #include <stdint.h>
 typedef uint8_t  u8;
 typedef uint16_t u16;
@@ -51,17 +60,10 @@ struct string {
 };
 #define STRZ(Str) string(Str, strlen(Str))
 
-#define STB_IMAGE_IMPLEMENTATION
-#pragma warning(push)
-#pragma warning(disable : 4244)
-#include <stb_image.h>
-#pragma warning(pop)
-
 #include "array.cpp"
 
 #include "focal_math.h"
 #include "focal.h"
-
 #include "ui_core.cpp"
 
 #define WIDTH 840
@@ -75,6 +77,128 @@ global ID3D11RenderTargetView *render_target;
 global Input_State input;
 
 global f32 zoom = 1.0f;
+
+global UI_Draw_Data ui_draw_data;
+
+Font load_font(char *font_name) {
+    Font font{};
+    FT_Library ft_lib;
+    int err = FT_Init_FreeType(&ft_lib);
+    if (err) {
+        fprintf(stderr, "Error creating freetype lib: %d\n", err);
+    }
+
+    FT_Face face;
+    err = FT_New_Face(ft_lib, font_name, 0, &face);
+    if (err == FT_Err_Unknown_File_Format) {
+        fprintf(stderr, "Format not supported\n"); 
+    } else if (err) {
+        fprintf(stderr, "Font file could not be read\n");
+    }
+
+    err = FT_Set_Pixel_Sizes(face, 0, 20);
+    if (err) {
+        fprintf(stderr, "FT_Set_Pixel_Sizes failed\n");
+    }
+
+    int bbox_ymax = FT_MulFix(face->bbox.yMax, face->size->metrics.y_scale) >> 6;
+    int bbox_ymin = FT_MulFix(face->bbox.yMin, face->size->metrics.y_scale) >> 6;
+    int height = bbox_ymax - bbox_ymin;
+    float ascend = face->size->metrics.ascender / 64.f;
+    float descend = face->size->metrics.descender / 64.f;
+    float bbox_height = (float)(bbox_ymax - bbox_ymin);
+    float glyph_height = (float)face->size->metrics.height / 64.f;
+    float glyph_width = (float)(face->bbox.xMax - face->bbox.xMin) / 64.f;
+
+    int atlas_width = 0;
+    int atlas_height = 0;
+    int max_bmp_height = 0;
+    for (int i = 32; i < 256; i++) {
+        unsigned char c = (unsigned char)i;
+        if (FT_Load_Char(face, c, FT_LOAD_RENDER)) {
+            printf("Error loading char %c\n", c);
+            continue;
+        }
+
+        atlas_width += face->glyph->bitmap.width;
+        if (atlas_height < (int)face->glyph->bitmap.rows) {
+            atlas_height = face->glyph->bitmap.rows;
+        }
+
+        int bmp_height = face->glyph->bitmap.rows + face->glyph->bitmap_top;
+        if (max_bmp_height < bmp_height) {
+            max_bmp_height = bmp_height;
+        }
+    }
+
+    // +1 for the white pixel
+    atlas_width = atlas_width + 1;
+    int atlas_x = 1;
+        
+    // Pack glyph bitmaps
+    unsigned char *bitmap = (unsigned char *)calloc(atlas_width * atlas_height + 1, 1);
+    bitmap[0] = 255;
+    for (unsigned char c = 32; c < 128; c++) {
+        if (FT_Load_Char(face, c, FT_LOAD_RENDER)) {
+            printf("Error loading char '%c'\n", c);
+        }
+
+        Font_Glyph *glyph = &font.glyphs[c];
+        glyph->x0 = (f32)atlas_x / atlas_width;
+        glyph->y0 = 0.0f;
+        glyph->x1 = glyph->x0 + (f32)face->glyph->bitmap.width / atlas_width;
+        glyph->y1 = glyph->y0 + (f32)face->glyph->bitmap.rows / atlas_height;
+        glyph->off_x = (f32)face->glyph->bitmap_left;
+        glyph->off_y = (f32)face->glyph->bitmap_top;
+        glyph->advance_x = (f32)(face->glyph->advance.x >> 6);
+
+        // Write glyph bitmap to atlas
+        for (int y = 0; y < (int)face->glyph->bitmap.rows; y++) {
+            unsigned char *dest = bitmap + y * atlas_width + atlas_x;
+            unsigned char *source = face->glyph->bitmap.buffer + y * face->glyph->bitmap.width;
+            memcpy(dest, source, face->glyph->bitmap.width);
+        }
+
+        atlas_x += face->glyph->bitmap.width;
+    }
+    FT_Done_Face(face);
+    FT_Done_FreeType(ft_lib);
+
+    Texture font_texture{};
+    font_texture.size = v2(atlas_width, atlas_height);
+
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = atlas_width;
+    desc.Height = atlas_height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.SampleDesc.Quality = 0;
+    desc.Usage = D3D11_USAGE_IMMUTABLE;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.CPUAccessFlags = 0;
+    ID3D11Texture2D *font_tex2d = nullptr;
+    D3D11_SUBRESOURCE_DATA sr_data{};
+    sr_data.pSysMem = bitmap;
+    sr_data.SysMemPitch = atlas_width;
+    sr_data.SysMemSlicePitch = 0;
+    HRESULT hr = d3d_device->CreateTexture2D(&desc, &sr_data, &font_tex2d);
+    assert(SUCCEEDED(hr));
+    assert(font_tex2d != nullptr);
+    hr = d3d_device->CreateShaderResourceView(font_tex2d, nullptr, &font_texture.srv);
+    assert(SUCCEEDED(hr));
+
+    font.atlas_size = v2(atlas_width, atlas_height);
+    font.max_bmp_height = max_bmp_height;
+    font.ascend = ascend;
+    font.descend = descend;
+    font.bbox_height = height;
+    font.glyph_width = glyph_width;
+    font.glyph_height = glyph_height;
+    font.texture = font_texture;
+    return font;
+}
 
 inline string string_copy(const string str) {
     string result{};
@@ -220,7 +344,6 @@ internal Shader_Program create_shader_program(string src, char *vs_entry, char *
     return program;
 }
 
-UI_Draw_Data ui_draw_data;
 
 void ui_push_vertex(UI_Vertex v) {
     ui_draw_data.vertices.push(v);
@@ -247,6 +370,40 @@ void ui_draw_rect(UI_Rect rect, v4 color) {
     ui_push_vertex(v[0]);
     ui_push_vertex(v[2]);
     ui_push_vertex(v[3]);
+}
+
+void ui_draw_glyph(v2 p, u8 c, v4 color, Font *font) {
+    assert(c < 256);
+    Font_Glyph g = font->glyphs[c];
+    UI_Vertex v[4] = {};
+    v[0].p = p;
+    v[0].col = color;
+    v[0].uv = v2(g.x0, g.y0);
+    v[1].p = v2(p.x, p.y + font->glyph_height);
+    v[1].col = color;
+    v[1].uv = v2(g.x0, g.y1);
+    v[2].p = v2(p.x + font->glyph_width, p.y + font->glyph_height);
+    v[2].col = color;
+    v[2].uv = v2(g.x1, g.y1);
+    v[3].p = v2(p.x + font->glyph_width, p.y);
+    v[3].col = color;
+    v[3].uv = v2(g.x1, g.y0);
+
+    ui_push_vertex(v[0]);
+    ui_push_vertex(v[1]);
+    ui_push_vertex(v[2]);
+    ui_push_vertex(v[0]);
+    ui_push_vertex(v[2]);
+    ui_push_vertex(v[3]);
+}
+
+void ui_draw_text(v2 p, string text, Font *font) {
+    for (u64 i = 0; i < text.count; i++) {
+        u8 c = text.data[i];
+        Font_Glyph g = font->glyphs[i];
+        ui_draw_glyph(p, c, v4(1, 1, 1, 1), font);
+        p.x += 30.0f;
+    }
 }
 
 void ui_draw_root(UI_Box *root) {
@@ -294,7 +451,6 @@ void ui_draw() {
         d3d_context->Unmap(ui_draw_data.vertex_buffer, 0);
     }
 }
-
 
 int main(int argc, char **argv) {
     // hash_tests();
@@ -578,6 +734,9 @@ int main(int argc, char **argv) {
         }
     }
 
+    Font font = load_font("C:/Dev/Focal/JetBrainsMono.ttf");
+    ID3D11SamplerState *font_sampler = nearest_sampler;
+
     Image_Constants image_constants{};
     Grid_Constants grid_constants{};
     UI_Constants ui_constants{};
@@ -628,6 +787,9 @@ int main(int argc, char **argv) {
         footer_box->parent = nullptr;
         footer_box->bg_color = v4(0.92f, 0.75f, 0.30f, 1.0f);
         ui_push_parent(footer_box);
+
+
+        ui_draw_text(v2(100.0f, 300.0f), "Hello Text!", &font);
 
         // ================
         // INPUT
@@ -748,7 +910,6 @@ int main(int argc, char **argv) {
         ui_end_build();
         ui_draw();
 
-
         // =================
         // RENDER
         // =================
@@ -814,16 +975,18 @@ int main(int argc, char **argv) {
         d3d_context->IASetInputLayout(ui_program.input_layout);
 
         d3d_context->VSSetConstantBuffers(0, 1, &ui_program.constant_buffer);
-        d3d_context->PSSetConstantBuffers(0, 1, &ui_program.constant_buffer);
         d3d_context->VSSetShader(ui_program.vertex_shader, NULL, 0);
+
+        d3d_context->PSSetConstantBuffers(0, 1, &ui_program.constant_buffer);
         d3d_context->PSSetShader(ui_program.pixel_shader, NULL, 0);
+        d3d_context->PSSetSamplers(0, 1, &font_sampler);
+        d3d_context->PSSetShaderResources(0, 1, &font.texture.srv);
 
         stride = sizeof(UI_Vertex);
         offset = 0;
         d3d_context->IASetVertexBuffers(0, 1, &ui_draw_data.vertex_buffer, &stride, &offset);
 
         d3d_context->Draw((UINT)ui_draw_data.vertices.count, 0);
-
 
         swapchain->Present(0, 0);
 
@@ -842,6 +1005,5 @@ int main(int argc, char **argv) {
         last_counter = end_counter;
     }
     
-
     return 0;
 }
