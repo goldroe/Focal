@@ -1,5 +1,6 @@
 cbuffer Image_Constants : register(b0) {
     matrix projection;
+    float4 channels;
 };
 
 Texture2D image_texture : register(t0);
@@ -23,6 +24,5 @@ VS_OUT VS(VS_IN input) {
 }
 
 float4 PS(VS_OUT input) : SV_TARGET {
-    /* return float4(1, 1, 1, 1); */
-    return image_texture.Sample(texture_sampler, input.uv);
+    return channels * image_texture.Sample(texture_sampler, input.uv);
 }
