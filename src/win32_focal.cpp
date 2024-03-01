@@ -1,3 +1,7 @@
+// TODO: Cropping and saving
+// TODO: Display image info
+// TODO: Directory loading
+
 #ifdef _MSC_VER
 #define _CRT_SECURE_NO_WARNINGS
 #endif // _MSC_VER
@@ -19,6 +23,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
+#include <string.h>
 
 #include <stdint.h>
 typedef uint8_t  u8;
@@ -37,7 +42,6 @@ typedef double f64;
 #define global static
 #define local_persist static
 
-#include <string.h>
 struct string {
     u8 *data;
     u64 count;
@@ -53,10 +57,14 @@ struct string {
 #include <stb_image.h>
 #pragma warning(pop)
 
+#include "array.cpp"
+
 #include "focal_math.h"
 #include "focal.h"
 
-#define WIDTH 740
+#include "ui_core.cpp"
+
+#define WIDTH 840
 #define HEIGHT 720
 
 global IDXGISwapChain *swapchain;
@@ -212,9 +220,85 @@ internal Shader_Program create_shader_program(string src, char *vs_entry, char *
     return program;
 }
 
+UI_Draw_Data ui_draw_data;
+
+void ui_push_vertex(UI_Vertex v) {
+    ui_draw_data.vertices.push(v);
+}
+
+void ui_draw_rect(UI_Rect rect, v4 color) {
+    f32 x0 = rect.x, y0 = rect.y;
+    f32 x1 = rect.x + rect.width;
+    f32 y1 = rect.y + rect.height;
+
+    UI_Vertex v[4] = {};
+    v[0].p = v2(x0, y0);
+    v[0].col = color;
+    v[1].p = v2(x0, y1);
+    v[1].col = color;
+    v[2].p = v2(x1, y1);
+    v[2].col = color;
+    v[3].p = v2(x1, y0);
+    v[3].col = color;
+
+    ui_push_vertex(v[0]);
+    ui_push_vertex(v[1]);
+    ui_push_vertex(v[2]);
+    ui_push_vertex(v[0]);
+    ui_push_vertex(v[2]);
+    ui_push_vertex(v[3]);
+}
+
+void ui_draw_root(UI_Box *root) {
+    if (root->flags & UI_BoxFlag_DrawBackground) {
+        ui_draw_rect(root->rect, root->bg_color);
+    }
+        
+
+    for (UI_Box *child = root->first; child; child = child->next) {
+        ui_draw_root(child);
+    }
+}
+
+void ui_draw() {
+    for (int i = 0; i < ui_state.parents.count; i++) {
+        UI_Box *box = ui_state.parents[i];
+        ui_draw_root(box);
+    }
+
+    // (Re)create vertex buffer
+    if ((!ui_draw_data.vertex_buffer && ui_draw_data.vertices.count > 0) ||
+        ui_draw_data.vertices.count > ui_draw_data.vertex_buffer_size) {
+        if (ui_draw_data.vertex_buffer) {
+            ui_draw_data.vertex_buffer->Release();
+        }
+
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = (UINT)ui_draw_data.vertices.capacity * sizeof(UI_Vertex);
+        desc.Usage = D3D11_USAGE_DYNAMIC;
+        desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        if (d3d_device->CreateBuffer(&desc, nullptr, &ui_draw_data.vertex_buffer) != S_OK) {
+            fprintf(stderr, "Failed to create UI vertex buffer\n");
+        }
+        ui_draw_data.vertex_buffer_size = (int)ui_draw_data.vertices.capacity;
+    }
+
+    // Upload vertices
+    if (ui_draw_data.vertex_buffer) {
+        D3D11_MAPPED_SUBRESOURCE vertex_res{};
+        if (d3d_context->Map(ui_draw_data.vertex_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &vertex_res) != S_OK) {
+            fprintf(stderr, "Failed to Map vertex buffer");
+        }
+        memcpy(vertex_res.pData, ui_draw_data.vertices.data, ui_draw_data.vertices.count * sizeof(UI_Vertex));
+        d3d_context->Unmap(ui_draw_data.vertex_buffer, 0);
+    }
+}
+
+
 int main(int argc, char **argv) {
-    argc--;
-    argv++;
+    // hash_tests();
+    argc--; argv++;
 
     string file_arg = "";
 
@@ -244,7 +328,7 @@ int main(int argc, char **argv) {
     window_class.hInstance = hinstance;
     window_class.hCursor = LoadCursorA(NULL, IDC_ARROW);
     if (!RegisterClassA(&window_class)) {
-        printf("RegisterClassA failed, err:%d\n", GetLastError());
+        os_popupf("RegisterClassA failed, err:%d\n", GetLastError());
     }
 
     HWND window = 0;
@@ -259,10 +343,10 @@ int main(int argc, char **argv) {
             y = ((work_rc.bottom - work_rc.top) - rc.bottom) / 2;
             window = CreateWindowA(CLASSNAME, "Focal", WS_OVERLAPPEDWINDOW | WS_VISIBLE, x, y, rc.right - rc.left, rc.bottom - rc.top, NULL, NULL, hinstance, NULL);
         } else {
-            printf("AdjustWindowRect failed, err:%d\n", GetLastError());
+            fprintf(stderr, "AdjustWindowRect failed, err:%d\n", GetLastError());
         }
         if (!window) {
-            printf("CreateWindowA failed, err:%d\n", GetLastError());
+            os_popupf("CreateWindowA failed, err:%d\n", GetLastError());
         }
     }
 
@@ -335,7 +419,7 @@ int main(int argc, char **argv) {
     ID3D11DepthStencilState *depth_stencil_state = nullptr;
     {
         D3D11_DEPTH_STENCIL_DESC desc{};
-        desc.DepthEnable = false;
+        desc.DepthEnable = true;
         desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
         desc.DepthFunc = D3D11_COMPARISON_ALWAYS;
         desc.StencilEnable = false;
@@ -376,6 +460,14 @@ int main(int argc, char **argv) {
         { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,       0, offsetof(Image_Vertex, uv),       D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
     Shader_Program image_program = create_shader_program(image_shader, "VS", "PS", image_layout, ARRAYSIZE(image_layout), sizeof(Image_Constants));
+
+    string ui_shader = read_file("src/ui.hlsl");
+    D3D11_INPUT_ELEMENT_DESC ui_layout[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT,       0, offsetof(UI_Vertex, p), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,       0, offsetof(UI_Vertex, uv),       D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(UI_Vertex, col), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    };
+    Shader_Program ui_program = create_shader_program(ui_shader, "VS", "PS", ui_layout, ARRAYSIZE(ui_layout), sizeof(UI_Constants));
 
     ID3D11SamplerState *linear_sampler = nullptr;
     ID3D11SamplerState *nearest_sampler = nullptr;
@@ -441,7 +533,6 @@ int main(int argc, char **argv) {
         sample_texture.name = string_copy(file_name);
         sample_texture.srv = srv;
     }
-    v2 size = sample_texture.size;
 
     Image_Vertex vertices[] = {
         { v2(-0.5f, -0.5f), v2(0, 1) },
@@ -489,6 +580,7 @@ int main(int argc, char **argv) {
 
     Image_Constants image_constants{};
     Grid_Constants grid_constants{};
+    UI_Constants ui_constants{};
 
     bool sample_near = false;
 
@@ -514,6 +606,32 @@ int main(int argc, char **argv) {
 
         v2 window_center = v2_div_s(render_dim, 2.0f);
 
+        // ================
+        // GUI
+        // ================
+        ui_draw_data.vertices.reset_count();
+        ui_start_build();
+
+        UI_Box *header_box = ui_build_box_from_string("header", (UI_Box_Flags)(UI_BoxFlag_DrawBackground|UI_BoxFlag_DrawBorder));
+        header_box->req_size[UI_AxisX] = { UI_Size_Pixels, 400.0f};
+        header_box->req_size[UI_AxisY] = { UI_Size_Pixels, 40.0f};
+        header_box->position[UI_AxisX] = { UI_Position_Absolute, window_center.x - 200.0f};
+        header_box->position[UI_AxisY] = { UI_Position_Absolute, 0.0f};
+        header_box->bg_color = v4(0.92f, 0.75f, 0.30f, 1.0f);
+        ui_push_parent(header_box);
+
+        UI_Box *footer_box = ui_build_box_from_string("footer", (UI_Box_Flags)(UI_BoxFlag_DrawBackground|UI_BoxFlag_DrawBorder));
+        footer_box->req_size[UI_AxisX] = { UI_Size_Pixels, render_dim.x};
+        footer_box->req_size[UI_AxisY] = { UI_Size_Pixels, 30.0f};
+        footer_box->position[UI_AxisX] = { UI_Position_Absolute, 0.0f};
+        footer_box->position[UI_AxisY] = { UI_Position_Absolute, render_dim.y - 30.0f};
+        footer_box->parent = nullptr;
+        footer_box->bg_color = v4(0.92f, 0.75f, 0.30f, 1.0f);
+        ui_push_parent(footer_box);
+
+        // ================
+        // INPUT
+        // ================
         BYTE keyboard_bytes[256];
         if (GetKeyboardState(keyboard_bytes)) {
             for (int key = 0; key < 256; key++) {
@@ -538,16 +656,16 @@ int main(int argc, char **argv) {
 
         f32 speed = 10.0f;
         if (input.key_down('A')) {
-            position.x -= speed;
-        }
-        if (input.key_down('D')) {
             position.x += speed;
         }
+        if (input.key_down('D')) {
+            position.x -= speed;
+        }
         if (input.key_down('W')) {
-            position.y += speed;
+            position.y -= speed;
         }
         if (input.key_down('S')) {
-            position.y -= speed;
+            position.y += speed;
         }
 
         if (input.key_down('R')) {
@@ -574,6 +692,7 @@ int main(int argc, char **argv) {
 
         input.scroll_y_dt = 0.0f;
 
+
         m4 projection{};
         projection.e[0][0] = 2.0f / width;
         projection.e[1][1] = 2.0f / height;
@@ -581,7 +700,7 @@ int main(int argc, char **argv) {
         projection.e[3][3] = 1.0f;
         projection.e[3][0] = -1.0f;
         projection.e[3][1] = -1.0f;
-        projection.e[3][2] = 0.5f;
+        projection.e[3][2] = 0.0f;
           
         m4 camera_trans = m4_translate(v3(position.x, position.y, 0.0f));
         m4 camera_scale = m4_scale(v3(zoom, zoom, 1.0f));
@@ -596,16 +715,44 @@ int main(int argc, char **argv) {
         mvp = m4_mult(mvp, projection);
         
         image_constants.mvp = mvp;
+        image_constants.channels = v4(1.0f, 1.0f, 1.0f, 1.0f);
+        upload_constants(image_program.constant_buffer, (void *)&image_constants, sizeof(image_constants));
 
         grid_constants.c1 = v4(0.2f, 0.2f, 0.2f, 1.0f);
         grid_constants.c2 = v4(0.1f, 0.1f, 0.1f, 1.0f);
-        grid_constants.size = 100.0f;
+        grid_constants.size = 64.0f;
         grid_constants.cp = window_center;
-
-        upload_constants(image_program.constant_buffer, (void *)&image_constants, sizeof(image_constants));
         upload_constants(grid_program.constant_buffer, (void *)&grid_constants, sizeof(grid_constants));
-        
-        float bg_color[4] = {0, 0, 0, 0};
+
+        // NOTE: Create orthographic projection matrix and upload to constant buffer
+        {
+            float left = 0.0f;
+            float right = left + render_dim.x;
+            float top = 0.0f;
+            float bottom = top + render_dim.y;
+            float near = -1.0f;
+            float far = 1.0f;
+            m4 prj = m4_id();
+            prj.e[0][0] = 2.0f / (right - left);
+            prj.e[1][1] = 2.0f / (top - bottom);
+            prj.e[2][2] = 1.0f / (near - far);
+            prj.e[3][3] = 1.0f;
+            prj.e[3][0] = (left + right) / (left - right);
+            prj.e[3][1] = (bottom + top) / (bottom - top);
+            prj.e[3][2] = 0.0f;
+            ui_constants.projection = prj;
+        }
+        upload_constants(ui_program.constant_buffer, (void *)&ui_constants, sizeof(ui_constants));
+
+        // render UI
+        ui_end_build();
+        ui_draw();
+
+
+        // =================
+        // RENDER
+        // =================
+        float bg_color[4] = {0.08f, 0.08f, 0.08f, 0};
         d3d_context->ClearRenderTargetView(render_target, bg_color);
         d3d_context->ClearDepthStencilView(depth_stencil_view, D3D11_CLEAR_DEPTH|D3D11_CLEAR_STENCIL, 1.0f, 0);
         d3d_context->OMSetRenderTargets(1, &render_target, depth_stencil_view);
@@ -619,6 +766,8 @@ int main(int argc, char **argv) {
         viewport.MaxDepth = 1.0f;
         d3d_context->RSSetViewports(1, &viewport);
 
+        d3d_context->RSSetState(rasterizer_state);
+
         d3d_context->OMSetBlendState(blend_state, NULL, 0xffffffff);
         d3d_context->OMSetDepthStencilState(depth_stencil_state, 0);
 
@@ -628,10 +777,11 @@ int main(int argc, char **argv) {
             d3d_context->PSSetSamplers(0, 1, &linear_sampler);
         }
 
-        // render grid
+        // Render grid
         d3d_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         d3d_context->IASetInputLayout(grid_program.input_layout);
 
+        d3d_context->VSSetConstantBuffers(0, 1, &grid_program.constant_buffer);
         d3d_context->PSSetConstantBuffers(0, 1, &grid_program.constant_buffer);
         d3d_context->VSSetShader(grid_program.vertex_shader, NULL, 0);
         d3d_context->PSSetShader(grid_program.pixel_shader, NULL, 0);
@@ -642,8 +792,9 @@ int main(int argc, char **argv) {
 
         d3d_context->Draw(6, 0);
 
-        // render image
+        // Render image
         d3d_context->VSSetConstantBuffers(0, 1, &image_program.constant_buffer);
+        d3d_context->PSSetConstantBuffers(0, 1, &image_program.constant_buffer);
         d3d_context->VSSetShader(image_program.vertex_shader, NULL, 0);
         d3d_context->PSSetShader(image_program.pixel_shader, NULL, 0);
 
@@ -655,8 +806,24 @@ int main(int argc, char **argv) {
         d3d_context->IASetVertexBuffers(0, 1, &image_vertex_buffer, &stride, &offset);
 
         d3d_context->PSSetShaderResources(0, 1, &sample_texture.srv);
-
+        
         d3d_context->Draw(6, 0);
+
+        // Render UI
+        d3d_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        d3d_context->IASetInputLayout(ui_program.input_layout);
+
+        d3d_context->VSSetConstantBuffers(0, 1, &ui_program.constant_buffer);
+        d3d_context->PSSetConstantBuffers(0, 1, &ui_program.constant_buffer);
+        d3d_context->VSSetShader(ui_program.vertex_shader, NULL, 0);
+        d3d_context->PSSetShader(ui_program.pixel_shader, NULL, 0);
+
+        stride = sizeof(UI_Vertex);
+        offset = 0;
+        d3d_context->IASetVertexBuffers(0, 1, &ui_draw_data.vertex_buffer, &stride, &offset);
+
+        d3d_context->Draw((UINT)ui_draw_data.vertices.count, 0);
+
 
         swapchain->Present(0, 0);
 
