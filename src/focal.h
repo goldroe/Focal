@@ -1,11 +1,6 @@
 #ifndef FOCAL_H
 #define FOCAL_H
 
-struct Image_Vertex {
-    v2 p;
-    v2 uv;
-};
-
 struct Texture {
     string name;
     v2 size;
@@ -27,8 +22,20 @@ struct Input_State {
     }
 };
 
+struct Image_Vertex {
+    v2 p;
+    v2 uv;
+};
+
+struct UI_Vertex {
+    v2 p;
+    v2 uv;
+    v4 col;
+};
+
 struct Image_Constants {
     m4 mvp;
+    v4 channels;
 };
 
 struct Grid_Constants {
@@ -39,6 +46,10 @@ struct Grid_Constants {
     f32 padding;
 };
 
+struct UI_Constants {
+    m4 projection;
+};
+
 struct Shader_Program {
     ID3D11VertexShader *vertex_shader;
     ID3D11PixelShader *pixel_shader;
@@ -46,8 +57,14 @@ struct Shader_Program {
     ID3D11Buffer *constant_buffer;
 };
 
+struct UI_Draw_Data {
+    int vertex_buffer_size;
+    Array<UI_Vertex> vertices;
+    ID3D11Buffer *vertex_buffer;
+};
+
 internal void os_popup(char *str) {
-    MessageBoxA(NULL, str, NULL, MB_OK);
+    MessageBoxA(NULL, str, NULL, MB_OK | MB_ICONERROR | MB_ICONEXCLAMATION);
 }
 
 internal void os_popupf(char *fmt, ...) {
