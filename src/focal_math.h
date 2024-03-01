@@ -8,10 +8,12 @@ union v2 {
     struct {
         float u, v;
     };
+    float e[2];
 
     v2() : x(0), y(0) {}
     v2(float x, float y) : x(x), y(y) {}
     v2(int x, int y) : x((float)x), y((float)y) {}
+    float &operator[](int index) { assert(index < 2); return e[index]; }
 };
 
 union v3 {
@@ -21,10 +23,12 @@ union v3 {
     struct {
         float u, v, w;
     };
+    float e[3];
 
     v3() : x(0), y(0), z(0) {}
     v3(float x, float y, float z) : x(x), y(y), z(z) {}
     v3(int x, int y, int z) : x((float)x), y((float)y), z((float)z) {}
+    float &operator[](int index) { assert(index < 3); return e[index]; }
 };
 
 union v4 {
@@ -34,10 +38,12 @@ union v4 {
     struct {
         float r, g, b, a;
     };
+    float e[4];
 
     v4() : x(0), y(0), z(0), w(0) {}
     v4(float x, float y, float z, float w) : x(x), y(y), z(z), w(w) {}
     v4(int x, int y, int z, int w) : x((float)x), y((float)y), z((float)z), w((float)w) {}
+    float &operator[](int index) { assert(index < 4); return e[index]; }
 };
 
 union m4 {
