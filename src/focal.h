@@ -65,6 +65,7 @@ struct UI_Draw_Data {
 
 struct Font_Glyph {
     f32 x0, y0, x1, y1;
+    v2 size;
     f32 off_x, off_y;
     f32 advance_x;
 };

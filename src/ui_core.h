@@ -72,6 +72,8 @@ struct UI_Box {
     UI_Box *prev;
     UI_Box *parent;
 
+    string text;
+
     v4 bg_color;
     v4 text_color;
     v4 border_color;
@@ -83,7 +85,7 @@ struct UI_State {
     
     Array<UI_Box*> parents;
 
-    Font font;
+    Font *font;
 };
 
 

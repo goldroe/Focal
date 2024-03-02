@@ -80,8 +80,9 @@ global f32 zoom = 1.0f;
 
 global UI_Draw_Data ui_draw_data;
 
-Font load_font(char *font_name) {
-    Font font{};
+Font *load_font(char *font_name, int font_size) {
+    Font *font = (Font *)malloc(sizeof(Font));
+    // font->glyphs = (Font_Glyph *)malloc(256 * sizeof(Font_Glyph));
     FT_Library ft_lib;
     int err = FT_Init_FreeType(&ft_lib);
     if (err) {
@@ -96,7 +97,7 @@ Font load_font(char *font_name) {
         fprintf(stderr, "Font file could not be read\n");
     }
 
-    err = FT_Set_Pixel_Sizes(face, 0, 20);
+    err = FT_Set_Pixel_Sizes(face, 0, font_size);
     if (err) {
         fprintf(stderr, "FT_Set_Pixel_Sizes failed\n");
     }
@@ -138,16 +139,18 @@ Font load_font(char *font_name) {
     // Pack glyph bitmaps
     unsigned char *bitmap = (unsigned char *)calloc(atlas_width * atlas_height + 1, 1);
     bitmap[0] = 255;
-    for (unsigned char c = 32; c < 128; c++) {
+    for (int i = 32; i < 256; i++) {
+        unsigned char c = (unsigned char)i;
         if (FT_Load_Char(face, c, FT_LOAD_RENDER)) {
             printf("Error loading char '%c'\n", c);
         }
 
-        Font_Glyph *glyph = &font.glyphs[c];
+        Font_Glyph *glyph = &font->glyphs[c];
         glyph->x0 = (f32)atlas_x / atlas_width;
         glyph->y0 = 0.0f;
         glyph->x1 = glyph->x0 + (f32)face->glyph->bitmap.width / atlas_width;
         glyph->y1 = glyph->y0 + (f32)face->glyph->bitmap.rows / atlas_height;
+        glyph->size = v2((f32)face->glyph->bitmap.width, (f32)face->glyph->bitmap.rows);
         glyph->off_x = (f32)face->glyph->bitmap_left;
         glyph->off_y = (f32)face->glyph->bitmap_top;
         glyph->advance_x = (f32)(face->glyph->advance.x >> 6);
@@ -158,6 +161,8 @@ Font load_font(char *font_name) {
             unsigned char *source = face->glyph->bitmap.buffer + y * face->glyph->bitmap.width;
             memcpy(dest, source, face->glyph->bitmap.width);
         }
+
+        // printf("'%c'    advance_x:%f off_x:%f off_y:%f\n", c, glyph->advance_x, glyph->off_x, glyph->off_y);
 
         atlas_x += face->glyph->bitmap.width;
     }
@@ -189,14 +194,14 @@ Font load_font(char *font_name) {
     hr = d3d_device->CreateShaderResourceView(font_tex2d, nullptr, &font_texture.srv);
     assert(SUCCEEDED(hr));
 
-    font.atlas_size = v2(atlas_width, atlas_height);
-    font.max_bmp_height = max_bmp_height;
-    font.ascend = ascend;
-    font.descend = descend;
-    font.bbox_height = height;
-    font.glyph_width = glyph_width;
-    font.glyph_height = glyph_height;
-    font.texture = font_texture;
+    font->atlas_size = v2(atlas_width, atlas_height);
+    font->max_bmp_height = max_bmp_height;
+    font->ascend = ascend;
+    font->descend = descend;
+    font->bbox_height = height;
+    font->glyph_width = glyph_width;
+    font->glyph_height = glyph_height;
+    font->texture = font_texture;
     return font;
 }
 
@@ -345,11 +350,11 @@ internal Shader_Program create_shader_program(string src, char *vs_entry, char *
 }
 
 
-void ui_push_vertex(UI_Vertex v) {
+internal void ui_push_vertex(UI_Vertex v) {
     ui_draw_data.vertices.push(v);
 }
 
-void ui_draw_rect(UI_Rect rect, v4 color) {
+internal void ui_draw_rect(UI_Rect rect, v4 color) {
     f32 x0 = rect.x, y0 = rect.y;
     f32 x1 = rect.x + rect.width;
     f32 y1 = rect.y + rect.height;
@@ -372,22 +377,38 @@ void ui_draw_rect(UI_Rect rect, v4 color) {
     ui_push_vertex(v[3]);
 }
 
-void ui_draw_glyph(v2 p, u8 c, v4 color, Font *font) {
+internal void ui_draw_rect_outline(UI_Rect rect, f32 thickness, v4 color) {
+    f32 x0 = rect.x, y0 = rect.y;
+    f32 x1 = rect.x + rect.width;
+    f32 y1 = rect.y + rect.height;
+
+    ui_draw_rect({x0, y0, rect.width, thickness}, color);
+    ui_draw_rect({x0, y1 - thickness, rect.width, thickness}, color);
+    ui_draw_rect({x0, y0, thickness, rect.height}, color);
+    ui_draw_rect({x1 - thickness, y0, thickness, rect.height}, color);
+}
+
+internal void ui_draw_glyph(v2 p, u8 c, v4 color, Font *font) {
     assert(c < 256);
     Font_Glyph g = font->glyphs[c];
+    f32 x0 = p.x + g.off_x;
+    f32 x1 = x0 + g.size.x;
+    f32 y0 = p.y - g.off_y + font->ascend;
+    f32 y1 = y0 + g.off_y;
+
     UI_Vertex v[4] = {};
-    v[0].p = p;
+    v[0].p = v2(x0, y1);
     v[0].col = color;
-    v[0].uv = v2(g.x0, g.y0);
-    v[1].p = v2(p.x, p.y + font->glyph_height);
+    v[0].uv = v2(g.x0, g.y1);
+    v[1].p = v2(x0, y0);
     v[1].col = color;
-    v[1].uv = v2(g.x0, g.y1);
-    v[2].p = v2(p.x + font->glyph_width, p.y + font->glyph_height);
+    v[1].uv = v2(g.x0, g.y0);
+    v[2].p = v2(x1, y0);
     v[2].col = color;
-    v[2].uv = v2(g.x1, g.y1);
-    v[3].p = v2(p.x + font->glyph_width, p.y);
+    v[2].uv = v2(g.x1, g.y0);
+    v[3].p = v2(x1, y1);
     v[3].col = color;
-    v[3].uv = v2(g.x1, g.y0);
+    v[3].uv = v2(g.x1, g.y1);
 
     ui_push_vertex(v[0]);
     ui_push_vertex(v[1]);
@@ -397,27 +418,37 @@ void ui_draw_glyph(v2 p, u8 c, v4 color, Font *font) {
     ui_push_vertex(v[3]);
 }
 
-void ui_draw_text(v2 p, string text, Font *font) {
+internal void ui_draw_text(v2 p, string text, Font *font, v4 color) {
+    v2 pos = p;
     for (u64 i = 0; i < text.count; i++) {
         u8 c = text.data[i];
-        Font_Glyph g = font->glyphs[i];
-        ui_draw_glyph(p, c, v4(1, 1, 1, 1), font);
-        p.x += 30.0f;
+        Font_Glyph g = font->glyphs[c];
+        ui_draw_glyph(pos, c, color, font);
+        pos.x += g.advance_x;
     }
 }
 
-void ui_draw_root(UI_Box *root) {
+internal void ui_draw_root(UI_Box *root) {
     if (root->flags & UI_BoxFlag_DrawBackground) {
         ui_draw_rect(root->rect, root->bg_color);
     }
-        
+
+    if (root->flags & UI_BoxFlag_DrawBorder) {
+        ui_draw_rect_outline(root->rect, 1.0f, root->border_color);
+    }
+
+    if (root->flags & UI_BoxFlag_DrawText) {
+        v2 p = root->rect.p;
+        p.x += 4.0f;
+        ui_draw_text(p, root->text, ui_state.font, root->text_color);
+    }
 
     for (UI_Box *child = root->first; child; child = child->next) {
         ui_draw_root(child);
     }
 }
 
-void ui_draw() {
+internal void ui_draw() {
     for (int i = 0; i < ui_state.parents.count; i++) {
         UI_Box *box = ui_state.parents[i];
         ui_draw_root(box);
@@ -734,7 +765,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    Font font = load_font("C:/Dev/Focal/JetBrainsMono.ttf");
+    ui_state.font = load_font("data/Roboto-Regular.ttf", 14);
+
     ID3D11SamplerState *font_sampler = nearest_sampler;
 
     Image_Constants image_constants{};
@@ -771,25 +803,28 @@ int main(int argc, char **argv) {
         ui_draw_data.vertices.reset_count();
         ui_start_build();
 
-        UI_Box *header_box = ui_build_box_from_string("header", (UI_Box_Flags)(UI_BoxFlag_DrawBackground|UI_BoxFlag_DrawBorder));
+        UI_Box *header_box = ui_build_box_from_string("header", (UI_Box_Flags)(UI_BoxFlag_DrawBackground|UI_BoxFlag_DrawBorder|UI_BoxFlag_DrawText));
         header_box->req_size[UI_AxisX] = { UI_Size_Pixels, 400.0f};
         header_box->req_size[UI_AxisY] = { UI_Size_Pixels, 40.0f};
         header_box->position[UI_AxisX] = { UI_Position_Absolute, window_center.x - 200.0f};
         header_box->position[UI_AxisY] = { UI_Position_Absolute, 0.0f};
-        header_box->bg_color = v4(0.92f, 0.75f, 0.30f, 1.0f);
+        header_box->bg_color = v4(0.14f, 0.14f, 0.14f, 1.0f);
+        header_box->border_color = v4(0.4f, 0.4f, 0.4f, 1.0f);
+        header_box->text_color = v4(0.90f, 0.93f, 0.95f, 1.0f);
+        header_box->text = "Header";
         ui_push_parent(header_box);
 
-        UI_Box *footer_box = ui_build_box_from_string("footer", (UI_Box_Flags)(UI_BoxFlag_DrawBackground|UI_BoxFlag_DrawBorder));
+        UI_Box *footer_box = ui_build_box_from_string("footer", (UI_Box_Flags)(UI_BoxFlag_DrawBackground|UI_BoxFlag_DrawBorder|UI_BoxFlag_DrawText));
         footer_box->req_size[UI_AxisX] = { UI_Size_Pixels, render_dim.x};
-        footer_box->req_size[UI_AxisY] = { UI_Size_Pixels, 30.0f};
+        footer_box->req_size[UI_AxisY] = { UI_Size_Pixels, 40.0f};
         footer_box->position[UI_AxisX] = { UI_Position_Absolute, 0.0f};
-        footer_box->position[UI_AxisY] = { UI_Position_Absolute, render_dim.y - 30.0f};
+        footer_box->position[UI_AxisY] = { UI_Position_Absolute, render_dim.y - 40.0f};
+        footer_box->bg_color = v4(0.14f, 0.14f, 0.14f, 1.0f);
+        footer_box->border_color = v4(0.4f, 0.4f, 0.4f, 1.0f);
+        footer_box->text_color = v4(0.90f, 0.93f, 0.95f, 1.0f);
+        footer_box->text = "Footer";
         footer_box->parent = nullptr;
-        footer_box->bg_color = v4(0.92f, 0.75f, 0.30f, 1.0f);
         ui_push_parent(footer_box);
-
-
-        ui_draw_text(v2(100.0f, 300.0f), "Hello Text!", &font);
 
         // ================
         // INPUT
@@ -980,7 +1015,7 @@ int main(int argc, char **argv) {
         d3d_context->PSSetConstantBuffers(0, 1, &ui_program.constant_buffer);
         d3d_context->PSSetShader(ui_program.pixel_shader, NULL, 0);
         d3d_context->PSSetSamplers(0, 1, &font_sampler);
-        d3d_context->PSSetShaderResources(0, 1, &font.texture.srv);
+        d3d_context->PSSetShaderResources(0, 1, &ui_state.font->texture.srv);
 
         stride = sizeof(UI_Vertex);
         offset = 0;

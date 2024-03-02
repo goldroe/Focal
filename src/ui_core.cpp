@@ -2,10 +2,6 @@
 
 global UI_State ui_state;
 
-void ui_init() {
-
-}
-
 internal UI_Hash ui_hash_djb2(char *str) {
     UI_Hash hash = 5381;
     int c;
@@ -40,7 +36,6 @@ internal void hash_tests() {
     hash = ui_hash_djb2(str);
     printf("%s hash %d\n", str, hash);
 }
-
 
 internal UI_Box *ui_find_box(UI_Hash hash, int build_index) {
     UI_Box *result = nullptr;
@@ -83,13 +78,21 @@ internal UI_Box *ui_build_box_from_string(char *str, UI_Box_Flags flags) {
     return box;
 }
 
+internal f32 measure_text_width(string text, Font *font) {
+    f32 width = 0.0f;
+    for (int i = 0; i < text.count; i++) {
+        u8 c = text.data[i];
+        width += font->glyphs[c].advance_x;
+    }
+    return width;
+}
+
 internal void ui_layout_calc_fixed_sizes(UI_Box *root, UI_Axis axis) {
     f32 size = 0;
     switch (root->req_size[axis].type) {
     default: break;
     case UI_Size_TextContents:
-        // TODO: Get text size
-        size = (axis == UI_AxisX) ? 100.0f : 20.0f;
+        size = (axis == UI_AxisX) ? measure_text_width(root->text, ui_state.font) : 20.0f;
         break;
     case UI_Size_Pixels:
         size = root->req_size[axis].value;
