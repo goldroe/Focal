@@ -82,7 +82,6 @@ global UI_Draw_Data ui_draw_data;
 
 Font *load_font(char *font_name, int font_size) {
     Font *font = (Font *)malloc(sizeof(Font));
-    // font->glyphs = (Font_Glyph *)malloc(256 * sizeof(Font_Glyph));
     FT_Library ft_lib;
     int err = FT_Init_FreeType(&ft_lib);
     if (err) {
@@ -382,10 +381,10 @@ internal void ui_draw_rect_outline(UI_Rect rect, f32 thickness, v4 color) {
     f32 x1 = rect.x + rect.width;
     f32 y1 = rect.y + rect.height;
 
-    ui_draw_rect({x0, y0, rect.width, thickness}, color);
-    ui_draw_rect({x0, y1 - thickness, rect.width, thickness}, color);
-    ui_draw_rect({x0, y0, thickness, rect.height}, color);
-    ui_draw_rect({x1 - thickness, y0, thickness, rect.height}, color);
+    ui_draw_rect(UI_Rect(x0, y0, rect.width, thickness), color);
+    ui_draw_rect(UI_Rect(x0, y1 - thickness, rect.width, thickness), color);
+    ui_draw_rect(UI_Rect(x0, y0, thickness, rect.height), color);
+    ui_draw_rect(UI_Rect(x1 - thickness, y0, thickness, rect.height), color);
 }
 
 internal void ui_draw_glyph(v2 p, u8 c, v4 color, Font *font) {
@@ -430,15 +429,15 @@ internal void ui_draw_text(v2 p, string text, Font *font, v4 color) {
 
 internal void ui_draw_root(UI_Box *root) {
     if (root->flags & UI_BoxFlag_DrawBackground) {
-        ui_draw_rect(root->rect, root->bg_color);
+        ui_draw_rect(UI_Rect(root->position, root->size), root->bg_color);
     }
 
     if (root->flags & UI_BoxFlag_DrawBorder) {
-        ui_draw_rect_outline(root->rect, 1.0f, root->border_color);
+        ui_draw_rect_outline(UI_Rect(root->position, root->size), 1.0f, root->border_color);
     }
 
     if (root->flags & UI_BoxFlag_DrawText) {
-        v2 p = root->rect.p;
+        v2 p = root->position;
         p.x += 4.0f;
         ui_draw_text(p, root->text, ui_state.font, root->text_color);
     }
@@ -765,7 +764,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    ui_state.font = load_font("data/Roboto-Regular.ttf", 14);
+    ui_state.font = load_font("data/Roboto-Regular.ttf", 16);
+
+    ui_state.builds[0].reserve(100);
+    ui_state.builds[1].reserve(100);
 
     ID3D11SamplerState *font_sampler = nearest_sampler;
 
@@ -797,34 +799,8 @@ int main(int argc, char **argv) {
 
         v2 window_center = v2_div_s(render_dim, 2.0f);
 
-        // ================
-        // GUI
-        // ================
         ui_draw_data.vertices.reset_count();
         ui_start_build();
-
-        UI_Box *header_box = ui_build_box_from_string("header", (UI_Box_Flags)(UI_BoxFlag_DrawBackground|UI_BoxFlag_DrawBorder|UI_BoxFlag_DrawText));
-        header_box->req_size[UI_AxisX] = { UI_Size_Pixels, 400.0f};
-        header_box->req_size[UI_AxisY] = { UI_Size_Pixels, 40.0f};
-        header_box->position[UI_AxisX] = { UI_Position_Absolute, window_center.x - 200.0f};
-        header_box->position[UI_AxisY] = { UI_Position_Absolute, 0.0f};
-        header_box->bg_color = v4(0.14f, 0.14f, 0.14f, 1.0f);
-        header_box->border_color = v4(0.4f, 0.4f, 0.4f, 1.0f);
-        header_box->text_color = v4(0.90f, 0.93f, 0.95f, 1.0f);
-        header_box->text = "Header";
-        ui_push_parent(header_box);
-
-        UI_Box *footer_box = ui_build_box_from_string("footer", (UI_Box_Flags)(UI_BoxFlag_DrawBackground|UI_BoxFlag_DrawBorder|UI_BoxFlag_DrawText));
-        footer_box->req_size[UI_AxisX] = { UI_Size_Pixels, render_dim.x};
-        footer_box->req_size[UI_AxisY] = { UI_Size_Pixels, 40.0f};
-        footer_box->position[UI_AxisX] = { UI_Position_Absolute, 0.0f};
-        footer_box->position[UI_AxisY] = { UI_Position_Absolute, render_dim.y - 40.0f};
-        footer_box->bg_color = v4(0.14f, 0.14f, 0.14f, 1.0f);
-        footer_box->border_color = v4(0.4f, 0.4f, 0.4f, 1.0f);
-        footer_box->text_color = v4(0.90f, 0.93f, 0.95f, 1.0f);
-        footer_box->text = "Footer";
-        footer_box->parent = nullptr;
-        ui_push_parent(footer_box);
 
         // ================
         // INPUT
@@ -847,6 +823,41 @@ int main(int argc, char **argv) {
             }
         }
 
+        ui_state.mouse = v2(input.mouse.x, height - input.mouse.y);
+        ui_state.mouse_down = input.keys_down[VK_LBUTTON];
+        ui_state.mouse_pressed = input.keys_pressed[VK_LBUTTON];
+
+        UI_Box *menu = ui_build_box_from_string("menu", UI_BoxFlag_DrawBackground|UI_BoxFlag_DrawBorder);
+        menu->sem_position[UI_AxisX] = { UI_Position_Absolute, 100.0f};
+        menu->sem_position[UI_AxisY] = { UI_Position_Absolute, render_dim.y - 60.0f};
+        menu->sem_size[UI_AxisX] = { UI_Size_ChildrenSum, 1.0f};
+        menu->sem_size[UI_AxisY] = { UI_Size_ChildrenSum, 1.0f};
+        menu->bg_color = v4(0.17f, 0.17f, 0.17f, 1.0f);
+        menu->border_color = v4(0.1f, 0.1f, 0.1f, 1.0f);
+        menu->child_layout_axis = UI_AxisY;
+
+        ui_push_parent(menu);
+
+        UI_Box *zoom_button = ui_button("Zoom");
+        ui_push_box(zoom_button, menu);
+
+        UI_Box *prev_next_bar = ui_build_box_from_string("prev_next_bar", UI_BoxFlag_Nil);
+        prev_next_bar->sem_size[UI_AxisX] = { UI_Size_ChildrenSum, 1.0f };
+        prev_next_bar->sem_size[UI_AxisY] = { UI_Size_ChildrenSum, 1.0f };
+        prev_next_bar->child_layout_axis = UI_AxisX;
+        ui_push_box(prev_next_bar, menu);
+
+        UI_Box *prev_button = ui_button("<< Prev");
+        ui_push_box(prev_button, prev_next_bar);
+        UI_Box *next_button = ui_button("Next >>");
+        ui_push_box(next_button, prev_next_bar);
+
+        UI_Box *file_index_button = ui_button("File");
+        ui_push_box(file_index_button, menu);
+        
+        // ===============
+        // UPDATE
+        // ===============
         if (input.key_down(VK_ESCAPE)) {
             window_should_close = true;
         }
@@ -889,6 +900,10 @@ int main(int argc, char **argv) {
 
         input.scroll_y_dt = 0.0f;
 
+        
+        // ==================
+        // Upload GPU data
+        // ==================
 
         m4 projection{};
         projection.e[0][0] = 2.0f / width;

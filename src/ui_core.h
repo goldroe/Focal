@@ -14,6 +14,9 @@ union UI_Rect {
         v2 p;
         v2 size;
     };
+
+    UI_Rect(f32 x, f32 y, f32 width, f32 height) : x(x), y(y), width(width), height(height) {}
+    UI_Rect(v2 p, v2 size) : p(p), size(size) {}
 };
 
 enum UI_Axis {
@@ -47,10 +50,19 @@ struct UI_Size {
 };
 
 enum UI_Box_Flags {
+    UI_BoxFlag_Nil = 0,
     UI_BoxFlag_DrawBackground = (1 << 0),
     UI_BoxFlag_DrawText = (1 << 1),
     UI_BoxFlag_DrawBorder = (1 << 2),
 };
+
+inline UI_Box_Flags operator|(UI_Box_Flags a, UI_Box_Flags b) {
+    return static_cast<UI_Box_Flags>(static_cast<int>(a) | static_cast<int>(b));
+}
+
+inline UI_Box_Flags& operator|=(UI_Box_Flags &a, UI_Box_Flags b) {
+    return a = a | b;
+}
 
 typedef u32 UI_Hash;
 
@@ -58,11 +70,11 @@ struct UI_Box {
     UI_Hash hash;
     UI_Box_Flags flags;
 
-    UI_Size req_size[UI_AxisCount];
-    UI_Position position[UI_AxisCount];
-    v2 calc_size;
-    UI_Rect rect;
-    v2 rel_p;
+    UI_Size sem_size[UI_AxisCount];
+    UI_Position sem_position[UI_AxisCount];
+    v2 cursor;
+    v2 size;
+    v2 position;
 
     UI_Axis child_layout_axis;
 
@@ -82,11 +94,18 @@ struct UI_Box {
 struct UI_State {
     Array<UI_Box> builds[2];
     int build_index;
-    
+
     Array<UI_Box*> parents;
+    UI_Hash active_hash;
 
     Font *font;
-};
 
+    v2 mouse;
+    bool mouse_down;
+    bool mouse_pressed;
+
+    bool want_mouse;
+    bool want_key; 
+};
 
 #endif // UI_CORE_H

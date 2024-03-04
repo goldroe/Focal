@@ -49,6 +49,11 @@ internal UI_Box *ui_find_box(UI_Hash hash, int build_index) {
     return result;
 }
 
+internal UI_Box *ui_find_box(string string) {
+    UI_Hash hash = ui_hash_djb2((char *)string.data);
+    return ui_find_box(hash, !ui_state.build_index);
+}
+
 internal UI_Box *ui_get_current_parent() {
     if (ui_state.parents.is_empty()) return nullptr;
     return ui_state.parents.back();
@@ -58,24 +63,31 @@ internal void ui_push_parent(UI_Box *box) {
     ui_state.parents.push(box);
 }
 
-internal UI_Box *ui_push_box(UI_Box box) {
-    int count = (int)ui_state.builds[ui_state.build_index].count;
-    ui_state.builds[ui_state.build_index].push(box);
-    return &ui_state.builds[ui_state.build_index][count];
-}
-
 internal UI_Box *ui_build_box_from_hash(UI_Box_Flags flags, UI_Hash hash) {
     UI_Box *last_box = ui_find_box(hash, !ui_state.build_index);
     UI_Box box{};
     box.flags = flags;
     box.hash = hash;
-    box.parent = ui_get_current_parent();
-    return ui_push_box(box);
+    UI_Box *result = ui_state.builds[ui_state.build_index].push(box);
+    return result;
 }
 
 internal UI_Box *ui_build_box_from_string(char *str, UI_Box_Flags flags) {
     UI_Box *box = ui_build_box_from_hash(flags, ui_hash_djb2(str));
     return box;
+}
+
+internal void ui_push_box(UI_Box *box, UI_Box *parent) {
+    assert(parent && box);
+    box->parent = parent;
+    box->next = nullptr;
+    if (parent->first) {
+        parent->last->next = box;
+        box->prev = parent->last;
+        parent->last = box;
+    } else {
+        parent->first = parent->last = box;
+    }
 }
 
 internal f32 measure_text_width(string text, Font *font) {
@@ -87,108 +99,101 @@ internal f32 measure_text_width(string text, Font *font) {
     return width;
 }
 
-internal void ui_layout_calc_fixed_sizes(UI_Box *root, UI_Axis axis) {
+internal void ui_layout_calc_fixed_sizes(UI_Box *box, UI_Axis axis) {
     f32 size = 0;
-    switch (root->req_size[axis].type) {
+    switch (box->sem_size[axis].type) {
     default: break;
     case UI_Size_TextContents:
-        size = (axis == UI_AxisX) ? measure_text_width(root->text, ui_state.font) : 20.0f;
+        size = (axis == UI_AxisX) ? measure_text_width(box->text, ui_state.font) + 4.0f : ui_state.font->glyph_height;
         break;
     case UI_Size_Pixels:
-        size = root->req_size[axis].value;
+        size = box->sem_size[axis].value;
         break;
     }
-    root->calc_size[axis] = size;
+    box->size[axis] = size;
 
-    for (UI_Box *child = root->first; child; child = child->next) {
+    for (UI_Box *child = box->first; child; child = child->next) {
         ui_layout_calc_fixed_sizes(child, axis);
     }
 }
 
-internal void ui_layout_calc_upward_dependent(UI_Box *root, UI_Axis axis) {
-    UI_Box *parent = root->parent;
-    f32 size = 0;
-    switch (root->req_size[axis].type) {
+internal void ui_layout_calc_upward_dependent(UI_Box *box, UI_Axis axis) {
+    switch (box->sem_size[axis].type) {
     default: break;
-    case UI_Size_ParentPct:
-        if (parent == nullptr) break;
-        size = root->req_size[axis].value * parent->calc_size[axis];
+    case UI_Size_ParentPct: {
+        UI_Box *parent = box->parent;
+        while (parent->sem_size[axis].type == UI_Size_ParentPct) {
+            parent = parent->parent;
+            assert(parent);
+        }
+        f32 size = box->sem_size[axis].value * parent->size[axis];
+        box->size[axis] = size;
         break;
     }
+    }
 
-    for (UI_Box *child = root->first; child; child = child->next) {
+    for (UI_Box *child = box->first; child; child = child->next) {
         ui_layout_calc_upward_dependent(child, axis);
     }
 }
 
-internal void ui_layout_calc_downward_dependent(UI_Box *root, UI_Axis axis) {
-    switch (root->req_size[axis].type) {
-    case UI_Size_ChildrenSum: {
-        f32 sum = 0;
-        for (UI_Box *child = root->first; child; child = child->next) {
-            if (child->child_layout_axis == axis) {
-                sum += child->calc_size[axis];
-            }
-        }
-        sum = ui_clamp(sum, 0, root->calc_size[axis]);
-        break;
-    }
-    }
-
-    for (UI_Box *child = root->first; child; child = child->next) {
+internal void ui_layout_calc_downward_dependent(UI_Box *box, UI_Axis axis) {
+    for (UI_Box *child = box->first; child; child = child->next) {
         ui_layout_calc_downward_dependent(child, axis);
     }
-}
 
-internal void ui_layout_calc_resolve_sizes(UI_Box *root, UI_Axis axis) {
-    UI_Box *parent = root->parent;
-    if (parent) {
-        f32 end = root->rel_p[axis] + root->calc_size[axis];
-        // TODO: cascade violation to the relative positions of siblings (axis-aligned?)
-        if (end >= parent->calc_size[axis]) {
-            f32 over = end - parent->calc_size[axis];
-            root->calc_size[axis] -= over;
+    f32 size = 0;
+    switch (box->sem_size[axis].type) {
+    case UI_Size_ChildrenSum: {
+        assert(box->first && "Leaves can't depend on children");
+        f32 sum = 0;
+        for (UI_Box *child = box->first; child; child = child->next) {
+            if (box->child_layout_axis == axis) {
+                sum += child->size[axis];
+            } else {
+                sum = ui_max(sum, child->size[axis]);
+            }
         }
-    }
-
-    for (UI_Box *child = root->first; child; child = child->next) {
-        ui_layout_calc_resolve_sizes(child, axis);
-    }
-}
-
-internal void ui_layout_place_boxes(UI_Box *root, UI_Axis axis) {
-    f32 p = 0;
-    // TODO: place boxes based on the layout axis, size and parent relative pos
-    for (UI_Box *child = root->first; child; child = child->next) {
-        child->rel_p[axis] = p;
-        if (child->child_layout_axis == axis) {
-            p += child->calc_size[axis];
-        }
-    }
-
-    f32 abs_p = 0;
-    for (UI_Box *box = root; box; box = box->parent) {
-        abs_p += box->rel_p[axis];
-    }
-
-    root->rect.p[axis] = abs_p;
-    root->rect.size[axis] = root->calc_size[axis];
-
-    for (UI_Box *child = root->first; child; child = child->next) {
-        ui_layout_place_boxes(root, axis);
-    }
-}
-
-internal void ui_layout_apply_positions(UI_Box *root, UI_Axis axis) {
-    switch (root->position[axis].type) {
-    case UI_Position_Absolute: {
-        root->rect.p[axis] = root->position[axis].value;
+        box->size[axis] = sum;
         break;
     }
     }
+}
 
-    for (UI_Box *child = root->first; child; child = child->next) {
-        ui_layout_apply_positions(child, axis);
+internal void ui_layout_try_auto(UI_Box *box, UI_Axis axis) {
+    // NOTE: Try to calculate the cursors(relative pos from parent) of the children according the axis and the size of the siblings
+    if (box->child_layout_axis == axis) {
+        f32 cursor = 0;
+        for (UI_Box *child = box->first; child; child = child->next) {
+            child->cursor[axis] = cursor;
+            if (child->sem_position[axis].type == UI_Position_Automatic) {
+                cursor += child->size[axis];
+            }
+        }
+    }
+    for (UI_Box *child = box->first; child; child = child->next) {
+        ui_layout_try_auto(child, axis);
+    }
+}
+
+internal void ui_layout_finalize_positions(UI_Box *box, UI_Axis axis) {
+    switch (box->sem_position[axis].type) {
+    case UI_Position_Absolute: {
+        box->cursor[axis] = box->sem_position[axis].value;
+        box->position[axis] = box->sem_position[axis].value;
+        break;
+    }
+    case UI_Position_Automatic: {
+        f32 position = 0;
+        for (UI_Box *p = box; p; p = p->parent) {
+            position += p->cursor[axis];
+        }
+        box->position[axis] = position;
+        break; 
+    }
+    }
+    for (UI_Box *child = box->first; child; child = child->next) {
+        ui_layout_finalize_positions(child, axis);
     }
 }
 
@@ -196,9 +201,8 @@ internal void ui_layout_calc(UI_Box *root, UI_Axis axis) {
     ui_layout_calc_fixed_sizes(root, axis);
     ui_layout_calc_upward_dependent(root, axis);
     ui_layout_calc_downward_dependent(root, axis);
-    ui_layout_calc_resolve_sizes(root, axis);
-    ui_layout_place_boxes(root, axis);
-    ui_layout_apply_positions(root, axis);
+    ui_layout_try_auto(root, axis);
+    ui_layout_finalize_positions(root, axis);
 }
 
 internal void ui_start_build() {
@@ -215,4 +219,32 @@ internal void ui_end_build() {
     }
 
     ui_state.build_index = !ui_state.build_index;
+}
+
+inline bool ui_in_rect(v2 p, UI_Rect rect) {
+    return p.x >= rect.x && p.x <= (rect.x + rect.width) && p.y >= rect.y && p.y <= (rect.y + rect.height);
+}
+
+internal UI_Box *ui_button(string label) {
+    UI_Box *last_button = ui_find_box(label);
+    UI_Box *button = ui_build_box_from_string((char *)label.data, UI_BoxFlag_DrawText|UI_BoxFlag_DrawBackground);
+    button->sem_size[UI_AxisX] = { UI_Size_TextContents, 1.0f };
+    button->sem_size[UI_AxisY] = { UI_Size_TextContents, 1.0f };
+    button->sem_position[UI_AxisX] = { UI_Position_Automatic, 0 };
+    button->sem_position[UI_AxisY] = { UI_Position_Automatic, 0 };
+    button->bg_color = v4(0.24f, 0.25f, 0.25f, 1.0f);
+    button->text_color = v4(0.98f, 0.98f, 0.98f, 1.0f);
+    button->text = label;
+
+    bool hot = false;
+    if (last_button) {
+        hot = ui_in_rect(ui_state.mouse, UI_Rect(last_button->position, last_button->size));
+    }
+    if (hot) {
+        button->bg_color = v4(0.6f, 0.64f, 0.64f, 1.0f);
+        button->text_color = v4(0.4f, 0.4f, 0.4f, 1.0f);
+        if (ui_state.mouse_pressed) {
+        }
+    }
+    return button;
 }
