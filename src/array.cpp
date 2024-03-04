@@ -24,13 +24,14 @@ public:
         data = (T *)realloc(data, new_cap * sizeof(T));
         capacity = new_cap;
     }
-    
-    void push(T element) {
+
+    T* push(T element) {
         if (count + 1 > capacity) {
             grow(1);
         }
         data[count] = element;
         count++;
+        return &data[count - 1];
     }
 
     T &operator[](size_t index) {
