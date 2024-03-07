@@ -26,6 +26,12 @@ enum UI_Axis {
     UI_AxisCount
 };
 
+enum UI_Alignment {
+    UI_Alignment_Center,
+    UI_Alignment_Start,
+    UI_Alignment_End
+};
+
 enum UI_Size_Type {
     UI_Size_Pixels,
     UI_Size_TextContents,
@@ -54,6 +60,7 @@ enum UI_Box_Flags {
     UI_BoxFlag_DrawBackground = (1 << 0),
     UI_BoxFlag_DrawText = (1 << 1),
     UI_BoxFlag_DrawBorder = (1 << 2),
+    UI_BoxFlag_Clickable = (1 << 3),
 };
 
 inline UI_Box_Flags operator|(UI_Box_Flags a, UI_Box_Flags b) {
@@ -73,10 +80,13 @@ struct UI_Box {
     UI_Size sem_size[UI_AxisCount];
     UI_Position sem_position[UI_AxisCount];
     v2 cursor;
-    v2 size;
     v2 position;
+    v2 size;
 
     UI_Axis child_layout_axis;
+    UI_Alignment alignment[UI_AxisCount];
+    v2 padding;
+    v2 spacing;
 
     UI_Box *first;
     UI_Box *last;
@@ -103,9 +113,17 @@ struct UI_State {
     v2 mouse;
     bool mouse_down;
     bool mouse_pressed;
+    bool want_mouse_capture;
+    bool want_key_capture; 
 
-    bool want_mouse;
-    bool want_key; 
+    Array<UI_Box*> parent_stack;
+};
+
+struct UI_Button_Style {
+    v4 bg_color;
+    v4 text_color;
+    v4 hot_bg_color;
+    v4 hot_text_color;
 };
 
 #endif // UI_CORE_H

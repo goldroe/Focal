@@ -60,6 +60,25 @@ struct string {
 };
 #define STRZ(Str) string(Str, strlen(Str))
 
+string string_concat(string first, string last) {
+    string result{};
+    u64 count = first.count + last.count;
+    result.data = (u8 *)malloc(count + 1);
+    memcpy(result.data, first.data, first.count);
+    memcpy(result.data + first.count, last.data, last.count);
+    result.data[count] = 0;
+    result.count = count;
+    return result;
+}
+
+void string_free(string *str) {
+    assert(str->data);
+    free(str->data);
+    str->data = nullptr;
+    str->data = 0;
+    str->count = 0;
+}
+
 #include "array.cpp"
 
 #include "focal_math.h"
@@ -829,7 +848,7 @@ int main(int argc, char **argv) {
 
         UI_Box *menu = ui_build_box_from_string("menu", UI_BoxFlag_DrawBackground|UI_BoxFlag_DrawBorder);
         menu->sem_position[UI_AxisX] = { UI_Position_Absolute, 100.0f};
-        menu->sem_position[UI_AxisY] = { UI_Position_Absolute, render_dim.y - 60.0f};
+        menu->sem_position[UI_AxisY] = { UI_Position_Absolute, render_dim.y - 150.0f};
         menu->sem_size[UI_AxisX] = { UI_Size_ChildrenSum, 1.0f};
         menu->sem_size[UI_AxisY] = { UI_Size_ChildrenSum, 1.0f};
         menu->bg_color = v4(0.17f, 0.17f, 0.17f, 1.0f);
@@ -837,24 +856,32 @@ int main(int argc, char **argv) {
         menu->child_layout_axis = UI_AxisY;
 
         ui_push_parent(menu);
+            UI_Button_Style button_def{};
+            button_def.bg_color = v4(0.3f, 0.3f, 0.3f, 1.0f);
+            button_def.hot_bg_color = v4(0.6f, 0.6f, 0.6f, 1.0f);
+            button_def.text_color = v4(0.9f, 0.9f, 0.9f, 1.0f);
+            button_def.hot_text_color = v4(0.9f, 0.9f, 0.9f, 1.0f);
 
-        UI_Box *zoom_button = ui_button("Zoom");
-        ui_push_box(zoom_button, menu);
+            ui_push_parent(ui_bar(UI_AxisX, v4(1.0f, 1.0f, 1.0f, 1.0f)));
+                if (ui_button("Zoom", button_def)) {
+                    printf("Zoom\n");
+                }
+                if (ui_button("Prev", button_def)) {
+                    printf("Prev\n");
+                }
+                if (ui_button("Next", button_def)) {
+                    printf("Next\n");
+                }
+            ui_pop_parent();
 
-        UI_Box *prev_next_bar = ui_build_box_from_string("prev_next_bar", UI_BoxFlag_Nil);
-        prev_next_bar->sem_size[UI_AxisX] = { UI_Size_ChildrenSum, 1.0f };
-        prev_next_bar->sem_size[UI_AxisY] = { UI_Size_ChildrenSum, 1.0f };
-        prev_next_bar->child_layout_axis = UI_AxisX;
-        ui_push_box(prev_next_bar, menu);
+            if (ui_button("Foo", button_def)) {
+                printf("Foo\n");
+            }
+            if (ui_button("Buzz", button_def)) {
+                printf("Buzz\n");
+            }
+        ui_pop_parent();
 
-        UI_Box *prev_button = ui_button("<< Prev");
-        ui_push_box(prev_button, prev_next_bar);
-        UI_Box *next_button = ui_button("Next >>");
-        ui_push_box(next_button, prev_next_bar);
-
-        UI_Box *file_index_button = ui_button("File");
-        ui_push_box(file_index_button, menu);
-        
         // ===============
         // UPDATE
         // ===============

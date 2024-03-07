@@ -2,11 +2,11 @@
 
 global UI_State ui_state;
 
-internal UI_Hash ui_hash_djb2(char *str) {
+internal UI_Hash ui_hash_djb2(string str) {
     UI_Hash hash = 5381;
     int c;
-    while (*str) {
-        c = *str++;
+    for (u64 i = 0; i < str.count; i++) {
+        c = str.data[i];
         hash = ((hash << 5) + hash) + c; // hash * 33 + c
     }
     return hash;
@@ -54,27 +54,22 @@ internal UI_Box *ui_find_box(string string) {
     return ui_find_box(hash, !ui_state.build_index);
 }
 
-internal UI_Box *ui_get_current_parent() {
-    if (ui_state.parents.is_empty()) return nullptr;
-    return ui_state.parents.back();
+internal UI_Box *ui_top_parent() {
+    if (ui_state.parent_stack.is_empty()) return nullptr;
+    return ui_state.parent_stack.back();
 }
 
 internal void ui_push_parent(UI_Box *box) {
-    ui_state.parents.push(box);
+    // NOTE: Top level parent
+    if (ui_state.parent_stack.is_empty()) {
+        ui_state.parents.push(box);
+    }
+
+    ui_state.parent_stack.push(box);
 }
 
-internal UI_Box *ui_build_box_from_hash(UI_Box_Flags flags, UI_Hash hash) {
-    UI_Box *last_box = ui_find_box(hash, !ui_state.build_index);
-    UI_Box box{};
-    box.flags = flags;
-    box.hash = hash;
-    UI_Box *result = ui_state.builds[ui_state.build_index].push(box);
-    return result;
-}
-
-internal UI_Box *ui_build_box_from_string(char *str, UI_Box_Flags flags) {
-    UI_Box *box = ui_build_box_from_hash(flags, ui_hash_djb2(str));
-    return box;
+internal void ui_pop_parent() {
+    ui_state.parent_stack.pop();
 }
 
 internal void ui_push_box(UI_Box *box, UI_Box *parent) {
@@ -89,6 +84,25 @@ internal void ui_push_box(UI_Box *box, UI_Box *parent) {
         parent->first = parent->last = box;
     }
 }
+
+internal UI_Box *ui_build_box_from_hash(UI_Box_Flags flags, UI_Hash hash) {
+    UI_Box *last_box = ui_find_box(hash, !ui_state.build_index);
+    UI_Box box{};
+    box.flags = flags;
+    box.hash = hash;
+    UI_Box *result = ui_state.builds[ui_state.build_index].push(box);
+    UI_Box *parent = ui_top_parent();
+    if (parent != nullptr) {
+        ui_push_box(result, parent);
+    }
+    return result;
+}
+
+internal UI_Box *ui_build_box_from_string(char *str, UI_Box_Flags flags) {
+    UI_Box *box = ui_build_box_from_hash(flags, ui_hash_djb2(str));
+    return box;
+}
+
 
 internal f32 measure_text_width(string text, Font *font) {
     f32 width = 0.0f;
@@ -105,9 +119,11 @@ internal void ui_layout_calc_fixed_sizes(UI_Box *box, UI_Axis axis) {
     default: break;
     case UI_Size_TextContents:
         size = (axis == UI_AxisX) ? measure_text_width(box->text, ui_state.font) + 4.0f : ui_state.font->glyph_height;
+        size += 2 * box->padding[axis];
         break;
     case UI_Size_Pixels:
         size = box->sem_size[axis].value;
+        size += 2 * box->padding[axis];
         break;
     }
     box->size[axis] = size;
@@ -154,6 +170,7 @@ internal void ui_layout_calc_downward_dependent(UI_Box *box, UI_Axis axis) {
                 sum = ui_max(sum, child->size[axis]);
             }
         }
+        sum += 2 * box->padding[axis];
         box->size[axis] = sum;
         break;
     }
@@ -171,6 +188,7 @@ internal void ui_layout_try_auto(UI_Box *box, UI_Axis axis) {
             }
         }
     }
+    box->cursor[axis] += box->padding[axis];
     for (UI_Box *child = box->first; child; child = child->next) {
         ui_layout_try_auto(child, axis);
     }
@@ -225,26 +243,59 @@ inline bool ui_in_rect(v2 p, UI_Rect rect) {
     return p.x >= rect.x && p.x <= (rect.x + rect.width) && p.y >= rect.y && p.y <= (rect.y + rect.height);
 }
 
-internal UI_Box *ui_button(string label) {
+internal bool ui_button(string label, UI_Button_Style style) {
     UI_Box *last_button = ui_find_box(label);
-    UI_Box *button = ui_build_box_from_string((char *)label.data, UI_BoxFlag_DrawText|UI_BoxFlag_DrawBackground);
-    button->sem_size[UI_AxisX] = { UI_Size_TextContents, 1.0f };
-    button->sem_size[UI_AxisY] = { UI_Size_TextContents, 1.0f };
-    button->sem_position[UI_AxisX] = { UI_Position_Automatic, 0 };
-    button->sem_position[UI_AxisY] = { UI_Position_Automatic, 0 };
-    button->bg_color = v4(0.24f, 0.25f, 0.25f, 1.0f);
-    button->text_color = v4(0.98f, 0.98f, 0.98f, 1.0f);
-    button->text = label;
 
+    UI_Box *text_box = nullptr;
+    UI_Box *box = nullptr;
+
+    box = ui_build_box_from_string((char *)label.data, UI_BoxFlag_DrawBackground|UI_BoxFlag_Clickable);
+    box->sem_size[UI_AxisX] = { UI_Size_ChildrenSum, 1.0f };
+    box->sem_size[UI_AxisY] = { UI_Size_Pixels, ui_state.font->glyph_height * 2};
+    box->sem_position[UI_AxisX] = { UI_Position_Automatic, 0 };
+    box->sem_position[UI_AxisY] = { UI_Position_Automatic, 0 };
+    box->bg_color = style.bg_color;
+
+    string text_box_string = string_concat(label, "__TEXT");
+    UI_Hash text_hash = ui_hash_djb2(text_box_string); 
+    string_free(&text_box_string);
+
+    ui_push_parent(box);
+
+    text_box = ui_build_box_from_hash(UI_BoxFlag_DrawText, text_hash);
+    text_box->sem_size[UI_AxisX] = { UI_Size_TextContents, 1.0f };
+    text_box->sem_size[UI_AxisY] = { UI_Size_TextContents, 1.0f };
+    text_box->sem_position[UI_AxisX] = { UI_Position_Automatic, 1.0f};
+    text_box->sem_position[UI_AxisY] = { UI_Position_Automatic, 1.0f};
+    text_box->text = label;
+    text_box->text_color = style.text_color;
+
+    ui_pop_parent();
+
+    bool result = false;
     bool hot = false;
     if (last_button) {
         hot = ui_in_rect(ui_state.mouse, UI_Rect(last_button->position, last_button->size));
     }
+
     if (hot) {
-        button->bg_color = v4(0.6f, 0.64f, 0.64f, 1.0f);
-        button->text_color = v4(0.4f, 0.4f, 0.4f, 1.0f);
+        box->bg_color = style.hot_bg_color;
+        text_box->text_color = style.hot_text_color;
         if (ui_state.mouse_pressed) {
+            result = true;
         }
     }
-    return button;
+
+    return result;
+}
+
+internal UI_Box *ui_bar(UI_Axis layout_axis, v4 bg_color) {
+    UI_Box *box = ui_build_box_from_hash(UI_BoxFlag_DrawBackground, 0);
+    box->child_layout_axis = layout_axis;
+    box->sem_size[UI_AxisX] = { UI_Size_ChildrenSum, 1.0f };
+    box->sem_size[UI_AxisY] = { UI_Size_ChildrenSum, 1.0f };
+    box->sem_position[UI_AxisX] = { UI_Position_Automatic, 1.0f };
+    box->sem_position[UI_AxisY] = { UI_Position_Automatic, 1.0f };
+    box->bg_color = bg_color;
+    return box;
 }
