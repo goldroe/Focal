@@ -25,6 +25,11 @@ public:
         capacity = new_cap;
     }
 
+    void pop() {
+        assert(count > 0);
+        count--;
+    }
+
     T* push(T element) {
         if (count + 1 > capacity) {
             grow(1);
